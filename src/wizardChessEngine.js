@@ -515,6 +515,9 @@ export function initWizardChess() {
       const isContinuousStep = Boolean(prevPos) && moveLen > 1e-5 && moveLen < 8.0;
 
       for (const p of CATHEDRAL_SOLID_PILLARS) {
+        if (p.isColumn && typeof currentLocationIdx === 'number' && currentLocationIdx !== 0) {
+          continue;
+        }
         if (curPos.y > p.maxY) continue;
 
         let tClosest = 1.0;
@@ -949,11 +952,13 @@ export function initWizardChess() {
 
     // Consolidated Window Point Lights (4 side-aisle + 2 end-wall lights instead of 22 separate PointLights;
     // fine local window & column raking relief is evaluated analytically in applyCathedralStoneRealismShader)
+    const sideWinLights = [];
     for (const wz of [-8.8, 8.2]) {
       for (const sideSign of [-1, 1]) {
         const winLight = new THREE.PointLight(0x90beff, 4.2, 16.5, 1.35);
         winLight.position.set(sideSign * 5.3, 4.1, wz);
         scene.add(winLight);
+        sideWinLights.push(winLight);
       }
     }
     const northWinLight = new THREE.PointLight(0x9bc4ff, 6.4, 20.0, 1.30);
@@ -1631,19 +1636,22 @@ export function initWizardChess() {
     scene.add(squareHighlightsGroup);
     const boardSquareMeshes = [];
 
+    const boardLightSqMat = new THREE.MeshStandardMaterial({
+      color: 0xdcd3c2,
+      roughness: 0.38,
+      metalness: 0.06
+    });
+    const boardDarkSqMat = new THREE.MeshStandardMaterial({
+      color: 0x14171f,
+      roughness: 0.28,
+      metalness: 0.18
+    });
+
     function buildChessBoardGrid() {
       const tileH = 0.036;
       const sqGeo = new THREE.BoxGeometry(BOARD_SQ_SIZE * 0.985, tileH, BOARD_SQ_SIZE * 0.985);
-      const lightSqMat = new THREE.MeshStandardMaterial({
-        color: 0xdcd3c2,
-        roughness: 0.38,
-        metalness: 0.06
-      });
-      const darkSqMat = new THREE.MeshStandardMaterial({
-        color: 0x14171f,
-        roughness: 0.28,
-        metalness: 0.18
-      });
+      const lightSqMat = boardLightSqMat;
+      const darkSqMat = boardDarkSqMat;
 
       for (let r = 0; r < 8; r++) {
         for (let c = 0; c < 8; c++) {
@@ -1709,6 +1717,11 @@ export function initWizardChess() {
     const cathedralWallMats = [];
     const cathedralColumnMats = [];
     const cathedralFloorMats = [];
+    const cathedralAmberGlassMats = [];
+    const cathedralBlueGlassMats = [];
+    let brazierFlameCoreMat = null;
+    let brazierFlameMidMat = null;
+    let brazierFlameOuterMat = null;
 
     // Precomputed 128x128 tileable micro-chisel grain DataTexture (replaces 32 per-pixel 3D hashes every frame)
     const stoneMicroGrainTex = (() => {
@@ -1914,6 +1927,8 @@ export function initWizardChess() {
       return setFloorStoneLook(0);
     }
 
+    let cathedralRootMesh = null;
+
     async function loadAllAssets() {
       const loaderBar = document.getElementById('loader-bar');
       const loaderText = document.getElementById('loader-text');
@@ -1989,6 +2004,9 @@ export function initWizardChess() {
         layerSeed: 4.4
       });
       const charredEmberLogsShader = createCharredEmberLogsShader();
+      brazierFlameCoreMat = flameCoreShader;
+      brazierFlameMidMat = flameMidShader;
+      brazierFlameOuterMat = flameOuterShader;
 
       // 1. Load Native Full-Height Cathedral Environment (shifted by z = -0.65 so the Obsidian Altar is centered at 0, 0.7215, 0)
       const maxAniso = renderer.capabilities.getMaxAnisotropy() || 8;
@@ -1996,6 +2014,7 @@ export function initWizardChess() {
         loadGltfModel('option8_cathedral').then(
           (gltf) => {
             const cathedralRoot = gltf.scene;
+            cathedralRootMesh = cathedralRoot;
             cathedralRoot.position.set(0, 0, -0.65);
 
             cathedralRoot.traverse((child) => {
@@ -2088,6 +2107,7 @@ export function initWizardChess() {
                   mat.metalness = 0.0;
                   mat.side = THREE.DoubleSide;
                   child.castShadow = false;
+                  if (!cathedralAmberGlassMats.includes(mat)) cathedralAmberGlassMats.push(mat);
                 } else if (isGlass) {
                   mat.vertexColors = false;
                   mat.color = new THREE.Color(0xdbeeff);
@@ -2097,6 +2117,7 @@ export function initWizardChess() {
                   mat.metalness = 0.0;
                   mat.side = THREE.DoubleSide;
                   child.castShadow = false;
+                  if (!cathedralBlueGlassMats.includes(mat)) cathedralBlueGlassMats.push(mat);
                 } else if (isRay) {
                   child.visible = false;
                   child.castShadow = false;
@@ -2625,6 +2646,9 @@ export function initWizardChess() {
         setCameraForSide(viewSide, false);
       }
 
+      if (typeof clearBoardTrapAndShieldMeshes === 'function') {
+        clearBoardTrapAndShieldMeshes();
+      }
       renderer.shadowMap.needsUpdate = true;
       updateTurnUI();
       if (typeof updateScriptBarUI === 'function') updateScriptBarUI();
@@ -2778,6 +2802,10 @@ export function initWizardChess() {
       const pseudo = getPseudoMovesForPiece(r, c, boardState);
       const legal = [];
       for (const m of pseudo) {
+        // Respect Hellfire Traps & Arcane Shields from Active Abilities
+        if (typeof isMoveBlockedByTrapOrShield === 'function' && isMoveBlockedByTrapOrShield(piece, m.r, m.c)) {
+          continue;
+        }
         const savedTarget = boardState[m.r][m.c];
         boardState[m.r][m.c] = piece;
         boardState[r][c] = null;
@@ -3035,14 +3063,14 @@ export function initWizardChess() {
       selectedSquare = null;
       validMoves = [];
 
-      // Broadcast to multiplayer room (cloud API + static BroadcastChannel/localStorage fallback)
+      // Broadcast to multiplayer room (WebSocket + cloud API + BroadcastChannel fallback)
       if (gameMode === 'multi' && roomCode && !options.fromRemote) {
         sendMultiplayerMove({
           playerToken,
           color: piece.color,
           from: { r: fromR, c: fromC },
           to: { r: toR, c: toC },
-          promotion: 'queen'
+          promotion: options.promotion || selectedPromotionType || 'archbishop'
         });
       }
 
@@ -3056,6 +3084,9 @@ export function initWizardChess() {
       const moveHeading = Math.atan2(dx, dz);
       piece.mesh.rotation.y = moveHeading;
       playPieceClip(piece, 'Move', true, 0.10);
+      if (typeof playSanctumSound === 'function') {
+        playSanctumSound(piece.type === 'demon_rider' || piece.type === 'dragon' ? 'demon_move' : 'move');
+      }
 
       // Detect Castling (King moves 2 files horizontally: e1->g1/c1 or e8->g8/c8) and animate the Rook simultaneously
       const isCastling = piece.type === 'king' && fromR === toR && Math.abs(toC - fromC) === 2;
@@ -3425,13 +3456,31 @@ export function initWizardChess() {
           orbitControls.update();
         }
 
+        if (isCapture && captured) {
+          if (typeof recordCapturedPieceSymbol === 'function') {
+            recordCapturedPieceSymbol(piece.color, captured.type);
+          }
+        }
+        if (typeof tickAbilitiesOnTurnEnd === 'function') {
+          tickAbilitiesOnTurnEnd();
+        }
         currentTurn = currentTurn === 'w' ? 'b' : 'w';
         isAnimatingMove = false;
         updateTurnUI();
         maybeScheduleAIMove();
       }
 
-      function stepMove(dt) {
+      const isHeavyCapture =
+        isCapture &&
+        captured &&
+        ['queen', 'dragon', 'demon_rider', 'archbishop', 'chancellor', 'wizard'].includes(captured.type);
+
+      function stepMove(rawDt) {
+        // Feature 6: Cinematic Slow-Motion on Heavy Piece Capture right around weapon contact & stone shatter
+        let dt = rawDt;
+        if (isHeavyCapture && elapsed >= tContact - 0.06 && elapsed <= tImpact + 0.18) {
+          dt = rawDt * 0.42;
+        }
         elapsed += dt;
 
         if (!isCapture) {
@@ -3573,6 +3622,9 @@ export function initWizardChess() {
                 const shatterOrigin = captured.mesh.position.clone();
                 scene.remove(captured.mesh);
                 spawnStoneShatter(shatterOrigin, captured.color);
+                if (typeof playSanctumSound === 'function') {
+                  playSanctumSound('capture');
+                }
               }
             }
 
@@ -3650,12 +3702,20 @@ export function initWizardChess() {
     const activeMoveTweens = [];
 
     // =========================================================================
-    // Single-Player Tactical AI (Auto-Plays Opponent Turn + Manual AI Button)
+    // Single-Player Tactical AI with 3 Personalities (Guardian, Demon, Grandmaster)
     // =========================================================================
-    function chooseSmartAIMove(color) {
+    const AI_PERSONAS = [
+      { id: 'grandmaster', ruLabel: 'ИИ: Гроссмейстер (Тактика)' },
+      { id: 'demon', ruLabel: 'ИИ: Агрессивный Демон' },
+      { id: 'guardian', ruLabel: 'ИИ: Хранитель Собора' }
+    ];
+    let currentAiPersonaIdx = 0;
+
+    function chooseSmartAIMove(color, forcePersonaId = null) {
       const legalMoves = getAllLegalMoves(color);
       if (legalMoves.length === 0) return null;
 
+      const persona = forcePersonaId || (AI_PERSONAS[currentAiPersonaIdx]?.id || 'grandmaster');
       let bestScore = -Infinity;
       let bestCandidates = [];
 
@@ -3664,14 +3724,21 @@ export function initWizardChess() {
         const target = boardState[m.toR][m.toC];
         let score = 0;
 
-        // Material gain on capture
+        // Material gain on capture (weighted by AI personality)
         if (target) {
-          score += PIECE_VALUES[target.type] * 1.15 - PIECE_VALUES[piece.type] * 0.08;
+          const capMult = persona === 'demon' ? 1.55 : (persona === 'guardian' ? 1.05 : 1.22);
+          score += PIECE_VALUES[target.type] * capMult - PIECE_VALUES[piece.type] * 0.08;
         }
 
         // Center control bonus
         const centerDist = Math.abs(3.5 - m.toR) + Math.abs(3.5 - m.toC);
-        score += (7 - centerDist) * 8;
+        score += (7 - centerDist) * (persona === 'grandmaster' ? 10 : 7);
+
+        // Forward aggression for Demon AI
+        if (persona === 'demon') {
+          const forwardSteps = color === 'w' ? (m.fromR - m.toR) : (m.toR - m.fromR);
+          score += forwardSteps * 18;
+        }
 
         // Pawn advancement bonus
         if (piece.type === 'pawn') {
@@ -3684,16 +3751,17 @@ export function initWizardChess() {
         boardState[m.fromR][m.fromC] = null;
         const oppColor = color === 'w' ? 'b' : 'w';
         if (isKingInCheck(oppColor, boardState)) {
-          score += 45;
+          score += persona === 'demon' ? 85 : 50;
         }
         // Check if opponent can recapture on destination square
+        const safetyWeight = persona === 'guardian' ? 1.15 : (persona === 'demon' ? 0.42 : 0.82);
         for (let rr = 0; rr < 8; rr++) {
           for (let cc = 0; cc < 8; cc++) {
             const opp = boardState[rr][cc];
             if (opp && opp.color === oppColor) {
               const oppMoves = getPseudoMovesForPiece(rr, cc, boardState);
               if (oppMoves.some((om) => om.r === m.toR && om.c === m.toC)) {
-                score -= PIECE_VALUES[piece.type] * 0.75;
+                score -= PIECE_VALUES[piece.type] * safetyWeight;
                 break;
               }
             }
@@ -3703,7 +3771,7 @@ export function initWizardChess() {
         boardState[m.toR][m.toC] = target;
 
         // Small jitter so AI varies openings
-        score += (Math.random() - 0.5) * 14;
+        score += (Math.random() - 0.5) * (persona === 'grandmaster' ? 6 : 14);
 
         if (score > bestScore + 1) {
           bestScore = score;
@@ -4585,6 +4653,10 @@ export function initWizardChess() {
         if (inCheck) {
           const winner = currentTurn === 'w' ? 'Чёрные' : 'Белые';
           turnText.textContent = `Шах и мат — Победили ${winner}`;
+          if (typeof playSanctumSound === 'function') playSanctumSound('checkmate');
+          if (typeof notifyCampaignBossResult === 'function') {
+            notifyCampaignBossResult(currentTurn === 'w' ? 'b' : 'w');
+          }
           if (!checkmateState.active) {
             triggerCheckmateSequence(currentTurn, currentTurn === 'w' ? 'b' : 'w');
           }
@@ -4597,6 +4669,9 @@ export function initWizardChess() {
         const isAiTurn = !scriptedGameActive && gameMode === 'single' && currentTurn === aiColor;
         if (inCheck) {
           turnText.textContent = `${turnLabel} (Шах!)`;
+          if (typeof triggerCathedralCheckReaction === 'function') {
+            triggerCathedralCheckReaction();
+          }
         } else if (isAiTurn) {
           turnText.textContent = `${turnLabel} (ИИ)...`;
         } else {
@@ -4618,7 +4693,9 @@ export function initWizardChess() {
         roomPill.style.display = 'none';
       }
 
-      if (capturedByWhite > 0 || capturedByBlack > 0) {
+      if (typeof updatePowerBalanceAndGraveyardUI === 'function') {
+        updatePowerBalanceAndGraveyardUI(capturedTray);
+      } else if (capturedByWhite > 0 || capturedByBlack > 0) {
         capturedTray.textContent = `Взято — Белые: ${capturedByWhite} | Чёрные: ${capturedByBlack}`;
       } else {
         capturedTray.textContent = '';
@@ -4796,30 +4873,29 @@ export function initWizardChess() {
       return null;
     }
 
-    async function sendMultiplayerMove(movePayload) {
-      if (!roomCode) return;
-      // 1. Update static local/BroadcastChannel room store immediately
-      const stRoom = getStaticRoom(roomCode);
-      if (stRoom) {
-        stRoom.moves = stRoom.moves || [];
-        stRoom.moves.push({
-          seq: stRoom.moves.length + 1,
-          color: movePayload.color,
-          from: movePayload.from,
-          to: movePayload.to,
-          promotion: movePayload.promotion || 'queen',
-          ts: Date.now()
-        });
-        stRoom.turn = movePayload.color === 'w' ? 'b' : 'w';
-        stRoom.updatedAt = Date.now();
-        saveAndBroadcastStaticRoom(stRoom);
+    // =========================================================================
+    // Real-Time Online Multiplayer (WebSocket /ws-online + HTTP/SSE + Local Sync)
+    // =========================================================================
+    let onlineWs = null;
+    let onlineReconnectTimer = null;
+    let onlineOpponentConnected = false;
+    let mpBroadcastChannel = null;
+    let mpEventSource = null;
+
+    function updateOnlineStatusUI(statusText, isConnected = false, isWaiting = false) {
+      const onlinePill = document.getElementById('online-status-pill');
+      const onlineLabel = document.getElementById('online-status-label');
+      const onlineDot = document.getElementById('online-status-dot');
+      if (onlineLabel && statusText) {
+        onlineLabel.textContent = statusText;
       }
-      // 2. Also broadcast to cloud/local room API if reachable
-      await mpApiRequest(`/api/rooms/${roomCode}/move`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(movePayload)
-      });
+      if (onlineDot) {
+        onlineDot.className = `online-dot ${isConnected ? 'connected' : isWaiting ? 'waiting' : 'offline'}`;
+      }
+      if (onlinePill) {
+        onlinePill.classList.toggle('connected', Boolean(isConnected));
+        onlinePill.classList.toggle('waiting', Boolean(isWaiting));
+      }
     }
 
     function stopMultiplayerSync() {
@@ -4831,213 +4907,497 @@ export function initWizardChess() {
         clearInterval(roomPollTimer);
         roomPollTimer = null;
       }
+      if (mpEventSource) {
+        mpEventSource.close();
+        mpEventSource = null;
+      }
+      if (mpBroadcastChannel) {
+        mpBroadcastChannel.close();
+        mpBroadcastChannel = null;
+      }
+      if (onlineReconnectTimer) {
+        clearTimeout(onlineReconnectTimer);
+        onlineReconnectTimer = null;
+      }
+      if (onlineWs) {
+        try {
+          onlineWs.onclose = null;
+          onlineWs.close();
+        } catch {
+          // ignore
+        }
+        onlineWs = null;
+      }
+      onlineOpponentConnected = false;
+      updateOnlineStatusUI('Онлайн: Лобби', false, false);
     }
 
-    function applyRemoteRoomState(room) {
-      if (!room) return;
-      const statusEl = document.getElementById('hud-room-status');
-      const bothReady = room.whiteJoined && room.blackJoined;
-      if (statusEl) {
-        statusEl.textContent = bothReady ? '2/2 Connected' : 'Waiting for Opponent';
-      }
-      const mpMsg = document.getElementById('mp-status-msg');
-      if (mpMsg && roomCode) {
-        mpMsg.textContent = bothReady
-          ? `Both players connected to Room ${room.code}!`
-          : `Room ${room.code} ready — waiting for second player to join...`;
+    function handleIncomingOnlinePayload(payload) {
+      if (!payload) return;
+
+      if (payload.type === 'room_state') {
+        const wConn = Boolean(payload.players?.w);
+        const bConn = Boolean(payload.players?.b);
+        const bothReady = wConn && bConn;
+        onlineOpponentConnected = bothReady;
+
+        if (typeof payload.locationId === 'string') {
+          const curLoc = SANCTUM_LOCATIONS[currentLocationIdx];
+          if (!curLoc || curLoc.id !== payload.locationId) {
+            setSanctumLocation(payload.locationId, { silent: true, fromRemote: true });
+          }
+        }
+        if (
+          typeof payload.formationIdx === 'number' &&
+          payload.formationIdx !== currentArmyFormationIdx &&
+          moveHistory.length === 0
+        ) {
+          setArmyFormation(payload.formationIdx, { fromRemote: true, silent: true });
+        }
+
+        const mpStatusEl = document.getElementById('mp-status-msg');
+        if (bothReady) {
+          const mySideName = playerColor === 'w' ? 'Белые (♔)' : 'Чёрные (♚)';
+          updateOnlineStatusUI(`В сети • Комната ${roomCode} • Вы: ${mySideName}`, true, false);
+          if (mpStatusEl) {
+            mpStatusEl.textContent = `✅ Противник подключился! Комната ${roomCode}. Вы играете за ${mySideName}.`;
+          }
+          if (payload.justMatched) {
+            playSanctumSound('ability');
+            showNotificationToast(`🌐 Противник найден! Комната ${roomCode} — Вы играете за ${mySideName}`);
+            closeLobbyModal();
+          }
+        } else {
+          updateOnlineStatusUI(`Ожидание соперника • Код: ${roomCode}`, false, true);
+          if (mpStatusEl) {
+            mpStatusEl.textContent = `⏳ Ожидание подключения второго игрока... Код комнаты: ${roomCode}`;
+          }
+        }
+
+        if (Array.isArray(payload.moves) && payload.moves.length > moveHistory.length) {
+          for (let i = moveHistory.length; i < payload.moves.length; i++) {
+            const mv = payload.moves[i];
+            if (mv && mv.from && mv.to) {
+              executeChessMove(mv.from.r, mv.from.c, mv.to.r, mv.to.c, {
+                fromRemote: true,
+                promotion: mv.promotion || 'archbishop'
+              });
+            }
+          }
+        }
+        updateTurnUI();
+        return;
       }
 
-      if (room.resetCount > appliedResetCount) {
-        appliedResetCount = room.resetCount;
-        appliedMoveSeq = 0;
-        resetChessBoard(false);
+      if (payload.type === 'move' && payload.move) {
+        const mv = payload.move;
+        if (mv.playerToken && mv.playerToken === playerToken) return;
+        if (mv.color === currentTurn && !isAnimatingMove) {
+          executeChessMove(mv.from.r, mv.from.c, mv.to.r, mv.to.c, {
+            fromRemote: true,
+            promotion: mv.promotion || 'archbishop'
+          });
+        }
+        return;
       }
 
-      if (Array.isArray(room.moves) && room.moves.length > appliedMoveSeq) {
-        const tryApplyNext = () => {
-          if (isAnimatingMove) {
-            setTimeout(tryApplyNext, 120);
-            return;
-          }
-          if (appliedMoveSeq >= room.moves.length) return;
-          const nextMove = room.moves[appliedMoveSeq];
-          appliedMoveSeq = nextMove.seq || (appliedMoveSeq + 1);
-          const pieceAtFrom = boardState[nextMove.from.r]?.[nextMove.from.c];
-          if (pieceAtFrom) {
-            executeChessMove(
-              nextMove.from.r,
-              nextMove.from.c,
-              nextMove.to.r,
-              nextMove.to.c,
-              { fromRemote: true }
-            );
-          }
-          if (appliedMoveSeq < room.moves.length) {
-            setTimeout(tryApplyNext, 250);
+      if (payload.type === 'reset') {
+        if (payload.playerToken && payload.playerToken === playerToken) return;
+        if (typeof payload.formationIdx === 'number') {
+          currentArmyFormationIdx = payload.formationIdx;
+          updateFormationButtonsUI();
+        }
+        resetChessBoard(false, false);
+        showNotificationToast('🔄 Соперник перезапустил партию');
+        return;
+      }
+
+      if (payload.type === 'location_change' && payload.locationId) {
+        if (payload.playerToken && payload.playerToken === playerToken) return;
+        setSanctumLocation(payload.locationId, { fromRemote: true });
+        return;
+      }
+
+      if (payload.type === 'formation_change' && typeof payload.formationIdx === 'number') {
+        if (payload.playerToken && payload.playerToken === playerToken) return;
+        setArmyFormation(payload.formationIdx, { fromRemote: true });
+        return;
+      }
+
+      if (payload.type === 'transmute' && typeof payload.r === 'number' && typeof payload.c === 'number') {
+        if (payload.playerToken && payload.playerToken === playerToken) return;
+        transmutePieceAt(payload.r, payload.c, payload.pieceType, { fromRemote: true });
+      }
+    }
+
+    function connectOnlineWebSocket(code) {
+      if (onlineWs) {
+        try {
+          onlineWs.onclose = null;
+          onlineWs.close();
+        } catch {
+          // ignore
+        }
+        onlineWs = null;
+      }
+
+      try {
+        const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${proto}//${window.location.host}/ws-online`;
+        const ws = new WebSocket(wsUrl);
+        onlineWs = ws;
+
+        ws.onopen = () => {
+          ws.send(
+            JSON.stringify({
+              type: 'subscribe',
+              code,
+              playerToken,
+              color: playerColor
+            })
+          );
+        };
+
+        ws.onmessage = (ev) => {
+          try {
+            const data = JSON.parse(ev.data);
+            handleIncomingOnlinePayload(data);
+          } catch {
+            // ignore
           }
         };
-        tryApplyNext();
+
+        ws.onclose = () => {
+          if (gameMode === 'multi' && roomCode === code) {
+            onlineReconnectTimer = setTimeout(() => {
+              if (gameMode === 'multi' && roomCode === code) {
+                connectOnlineWebSocket(code);
+              }
+            }, 2200);
+          }
+        };
+      } catch {
+        // Fallback to SSE / BroadcastChannel
       }
     }
 
-    function startMultiplayerSync(code) {
+    function sendOnlineEvent(eventObj) {
+      if (!roomCode) return;
+      const payload = { ...eventObj, code: roomCode, playerToken };
+      if (onlineWs && onlineWs.readyState === WebSocket.OPEN) {
+        try {
+          onlineWs.send(JSON.stringify(payload));
+        } catch {
+          // ignore
+        }
+      }
+      if (mpBroadcastChannel) {
+        try {
+          mpBroadcastChannel.postMessage(payload);
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    async function sendMultiplayerMove(movePayload) {
+      if (!roomCode) return;
+
+      // 1. Send immediately over WebSocket if open
+      if (onlineWs && onlineWs.readyState === WebSocket.OPEN) {
+        try {
+          onlineWs.send(
+            JSON.stringify({
+              type: 'move',
+              code: roomCode,
+              playerToken,
+              move: movePayload
+            })
+          );
+        } catch {
+          // ignore
+        }
+      }
+
+      // 2. Also POST to /api/rooms/move for HTTP/SSE persistence
+      try {
+        const res = await fetch('/api/rooms/move', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            code: roomCode,
+            ...movePayload
+          })
+        });
+        if (res.ok) return;
+      } catch {
+        // Fall through to local BroadcastChannel / localStorage sync
+      }
+
+      const stRoom = getStaticRoom(roomCode) || {
+        code: roomCode,
+        status: 'playing',
+        whiteJoined: true,
+        blackJoined: true,
+        turn: movePayload.color === 'w' ? 'b' : 'w',
+        moves: [],
+        resetCount: 0,
+        updatedAt: Date.now()
+      };
+      stRoom.moves = stRoom.moves || [];
+      stRoom.moves.push({
+        seq: stRoom.moves.length + 1,
+        color: movePayload.color,
+        from: movePayload.from,
+        to: movePayload.to,
+        promotion: movePayload.promotion || 'archbishop',
+        ts: Date.now()
+      });
+      stRoom.turn = movePayload.color === 'w' ? 'b' : 'w';
+      stRoom.updatedAt = Date.now();
+      saveAndBroadcastStaticRoom(stRoom);
+      if (mpBroadcastChannel) {
+        mpBroadcastChannel.postMessage({ type: 'move', move: movePayload });
+      }
+    }
+
+    function subscribeMultiplayerRoom(code) {
       stopMultiplayerSync();
       roomCode = code;
 
-      if (!isStaticHost) {
-        try {
-          roomEventSource = new EventSource(`/api/rooms/${code}/events`);
-          roomEventSource.onmessage = (ev) => {
-            try {
-              const data = JSON.parse(ev.data);
-              if (data.room) applyRemoteRoomState(data.room);
-            } catch (e) {}
-          };
-        } catch (e) {}
+      // 1. Real-time WebSocket connection (/ws-online)
+      connectOnlineWebSocket(code);
+
+      // 2. Same-origin cross-tab BroadcastChannel + storage event listener
+      if (typeof BroadcastChannel !== 'undefined') {
+        mpBroadcastChannel = new BroadcastChannel(`wizard_chess_bc_${code}`);
+        mpBroadcastChannel.onmessage = (ev) => {
+          handleIncomingOnlinePayload(ev.data);
+        };
       }
 
-      roomPollTimer = setInterval(async () => {
-        if (gameMode !== 'multi' || !roomCode) return;
-        const data = await mpApiRequest(
-          `/api/rooms/${roomCode}/state?playerToken=${encodeURIComponent(playerToken)}`
-        );
-        if (data && data.ok && data.room) {
-          saveAndBroadcastStaticRoom(data.room);
-          applyRemoteRoomState(data.room);
-          return;
-        }
-        const stRoom = getStaticRoom(roomCode);
-        if (stRoom) {
-          applyRemoteRoomState(stRoom);
-        }
-      }, 1500);
+      // 3. Server-Sent Events (/api/rooms/stream) backup
+      try {
+        mpEventSource = new EventSource(`/api/rooms/stream?code=${code}`);
+        mpEventSource.onmessage = (ev) => {
+          try {
+            const payload = JSON.parse(ev.data);
+            handleIncomingOnlinePayload(payload);
+          } catch {
+            // ignore
+          }
+        };
+        mpEventSource.onerror = () => {
+          if (mpEventSource) {
+            mpEventSource.close();
+            mpEventSource = null;
+          }
+        };
+      } catch {
+        // SSE not available
+      }
     }
 
-    async function createMultiplayerRoom(preferredColor) {
-      const mpMsg = document.getElementById('mp-status-msg');
-      mpMsg.textContent = 'Creating room...';
+    async function startQuickOnlineMatch() {
+      const mpStatusEl = document.getElementById('mp-status-msg');
+      if (mpStatusEl) {
+        mpStatusEl.textContent = '🔍 Поиск свободного соперника в сети...';
+      }
       ensurePlayerToken();
+      updateOnlineStatusUI('Поиск соперника...', false, true);
 
-      let data = await mpApiRequest('/api/rooms/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ preferredColor, playerToken })
-      });
+      try {
+        const res = await fetch('/api/matchmaking/quick', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            playerToken,
+            locationId: SANCTUM_LOCATIONS[currentLocationIdx]?.id || 'cathedral',
+            formationIdx: currentArmyFormationIdx
+          })
+        });
+        if (!res.ok) throw new Error('Matchmaking failed');
+        const data = await res.json();
+        roomCode = data.code;
+        playerToken = data.playerToken;
+        playerColor = data.color;
+        gameMode = 'multi';
+        scriptedGameActive = false;
 
-      // Pure static fallback if neither local nor remote server is reachable
-      if (!data || !data.ok) {
-        const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-        let genCode = '';
-        for (let i = 0; i < 4; i++) {
-          genCode += chars[Math.floor(Math.random() * chars.length)];
+        if (data.locationId) {
+          setSanctumLocation(data.locationId, { silent: true, fromRemote: true });
         }
-        const side = preferredColor === 'b' ? 'b' : 'w';
-        const staticRoom = {
-          code: genCode,
+
+        const newUrl = `${window.location.pathname}?room=${roomCode}`;
+        window.history.replaceState({}, '', newUrl);
+
+        const createdBox = document.getElementById('created-room-box');
+        if (createdBox) createdBox.style.display = 'block';
+        const createdCodeEl = document.getElementById('created-room-code');
+        if (createdCodeEl) createdCodeEl.textContent = roomCode;
+
+        resetChessBoard(true, false);
+        subscribeMultiplayerRoom(roomCode);
+
+        if (data.matched) {
+          onlineOpponentConnected = true;
+          const mySideName = playerColor === 'w' ? 'Белые (♔)' : 'Чёрные (♚)';
+          updateOnlineStatusUI(`В сети • Комната ${roomCode} • Вы: ${mySideName}`, true, false);
+          if (mpStatusEl) {
+            mpStatusEl.textContent = `⚔ Соперник найден! Комната ${roomCode}. Вы играете за ${mySideName}!`;
+          }
+          showNotificationToast(`⚔ Онлайн-матч начался! Комната ${roomCode} (${mySideName})`);
+          closeLobbyModal();
+        } else {
+          updateOnlineStatusUI(`Ожидание соперника • Код: ${roomCode}`, false, true);
+          if (mpStatusEl) {
+            mpStatusEl.textContent = `⏳ Создана открытая комната поиска ${roomCode} (Вы — Белые). Как только второй игрок нажмёт «Быстрый поиск» или введёт код, матч начнётся!`;
+          }
+          showNotificationToast(`🔍 Ожидание соперника в очереди (Код комнаты: ${roomCode})`);
+        }
+      } catch {
+        await createMultiplayerRoom('w');
+      }
+    }
+
+    async function createMultiplayerRoom(preferredColor = 'w') {
+      ensurePlayerToken();
+      let code = '';
+      let token = playerToken;
+      let color = preferredColor === 'b' ? 'b' : 'w';
+
+      try {
+        const res = await fetch('/api/rooms/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            preferredColor: color,
+            playerToken: token,
+            locationId: SANCTUM_LOCATIONS[currentLocationIdx]?.id || 'cathedral',
+            formationIdx: currentArmyFormationIdx
+          })
+        });
+        if (!res.ok) throw new Error('Static host fallback');
+        const data = await res.json();
+        code = data.code;
+        token = data.playerToken;
+        color = data.color;
+      } catch {
+        const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+        for (let i = 0; i < 4; i++) {
+          code += chars[Math.floor(Math.random() * chars.length)];
+        }
+        saveAndBroadcastStaticRoom({
+          code,
           status: 'waiting',
-          whiteJoined: side === 'w',
-          blackJoined: side === 'b',
+          whiteJoined: color === 'w',
+          blackJoined: color === 'b',
           turn: 'w',
           moves: [],
           resetCount: 0,
           updatedAt: Date.now()
-        };
-        saveAndBroadcastStaticRoom(staticRoom);
-        data = {
-          ok: true,
-          code: genCode,
-          color: side,
-          playerToken,
-          room: staticRoom
-        };
-      } else if (data.room) {
-        saveAndBroadcastStaticRoom(data.room);
+        });
       }
 
-      playerToken = data.playerToken;
-      try {
-        localStorage.setItem('wizard_chess_token', playerToken);
-      } catch (e) {}
-      scriptedGameActive = false;
+      roomCode = code;
+      playerToken = token;
+      playerColor = color;
       gameMode = 'multi';
-      playerColor = data.color;
-      roomCode = data.code;
-      appliedMoveSeq = 0;
-      appliedResetCount = data.room.resetCount || 0;
+      scriptedGameActive = false;
 
-      document.getElementById('modal-room-code').textContent = roomCode;
-      document.getElementById('room-created-panel').style.display = 'block';
+      const newUrl = `${window.location.pathname}?room=${roomCode}`;
+      window.history.replaceState({}, '', newUrl);
 
-      resetChessBoard(true);
-      startMultiplayerSync(roomCode);
-      applyRemoteRoomState(data.room);
-      window.history.replaceState({}, '', `?room=${roomCode}`);
+      const createdBox = document.getElementById('created-room-box');
+      if (createdBox) createdBox.style.display = 'block';
+      const createdCodeEl = document.getElementById('created-room-code');
+      if (createdCodeEl) createdCodeEl.textContent = roomCode;
+      const mpStatusEl = document.getElementById('mp-status-msg');
+      if (mpStatusEl) {
+        mpStatusEl.textContent = `Комната ${roomCode} создана! Вы играете за ${playerColor === 'w' ? 'Белых (♔)' : 'Чёрных (♚)'}. Отправьте код или ссылку другу.`;
+      }
+
+      updateOnlineStatusUI(`Ожидание соперника • Код: ${roomCode}`, false, true);
+      resetChessBoard(true, false);
+      subscribeMultiplayerRoom(roomCode);
     }
 
     async function joinMultiplayerRoom(codeInput) {
-      const code = String(codeInput || '').trim().toUpperCase();
-      const mpMsg = document.getElementById('mp-status-msg');
-      if (!code) {
-        mpMsg.textContent = 'Please enter a 4-character Room Code.';
+      const clean = String(codeInput || '').trim().toUpperCase();
+      const mpStatusEl = document.getElementById('mp-status-msg');
+      if (!clean) {
+        if (mpStatusEl) mpStatusEl.textContent = 'Введите 4-значный код комнаты.';
         return false;
       }
-      mpMsg.textContent = `Joining room ${code}...`;
       ensurePlayerToken();
 
-      let data = await mpApiRequest('/api/rooms/join', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code, playerToken })
-      });
+      let code = clean;
+      let token = playerToken;
+      let color = 'b';
+      let existingMoves = [];
+      let roomLocId = null;
 
-      if (!data || !data.ok) {
-        let stRoom = getStaticRoom(code);
-        if (!stRoom) {
-          stRoom = {
-            code,
-            status: 'playing',
-            whiteJoined: true,
-            blackJoined: true,
-            turn: 'w',
-            moves: [],
-            resetCount: 0,
-            updatedAt: Date.now()
-          };
+      try {
+        const res = await fetch('/api/rooms/join', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code: clean, playerToken: token })
+        });
+        if (!res.ok) throw new Error('Static host fallback');
+        const data = await res.json();
+        code = data.code;
+        token = data.playerToken;
+        color = data.color;
+        existingMoves = data.moves || [];
+        roomLocId = data.locationId || null;
+      } catch {
+        const stRoom = getStaticRoom(clean);
+        if (stRoom) {
+          color = !stRoom.whiteJoined ? 'w' : 'b';
+          existingMoves = stRoom.moves || [];
         } else {
-          if (!stRoom.whiteJoined) stRoom.whiteJoined = true;
-          else if (!stRoom.blackJoined) stRoom.blackJoined = true;
-          stRoom.status = stRoom.whiteJoined && stRoom.blackJoined ? 'playing' : 'waiting';
-          stRoom.updatedAt = Date.now();
+          color = 'b';
         }
-        const assignedColor = !stRoom.blackJoined ? 'w' : 'b';
-        saveAndBroadcastStaticRoom(stRoom);
-        data = {
-          ok: true,
-          code,
-          color: assignedColor,
-          playerToken,
-          room: stRoom
-        };
-      } else if (data.room) {
-        saveAndBroadcastStaticRoom(data.room);
       }
 
-      playerToken = data.playerToken;
-      try {
-        localStorage.setItem('wizard_chess_token', playerToken);
-      } catch (e) {}
-      scriptedGameActive = false;
+      roomCode = code;
+      playerToken = token;
+      playerColor = color;
       gameMode = 'multi';
-      playerColor = data.color;
-      roomCode = data.code;
-      appliedMoveSeq = 0;
-      appliedResetCount = data.room.resetCount || 0;
+      scriptedGameActive = false;
 
-      resetChessBoard(true);
-      startMultiplayerSync(roomCode);
-      applyRemoteRoomState(data.room);
-      window.history.replaceState({}, '', `?room=${roomCode}`);
+      const newUrl = `${window.location.pathname}?room=${roomCode}`;
+      window.history.replaceState({}, '', newUrl);
+
+      if (roomLocId) {
+        setSanctumLocation(roomLocId, { silent: true, fromRemote: true });
+      }
+
+      const createdBox = document.getElementById('created-room-box');
+      if (createdBox) createdBox.style.display = 'block';
+      const createdCodeEl = document.getElementById('created-room-code');
+      if (createdCodeEl) createdCodeEl.textContent = roomCode;
+      if (mpStatusEl) {
+        mpStatusEl.textContent = `Вы подключились к комнате ${roomCode} за ${playerColor === 'w' ? 'Белых (♔)' : 'Чёрных (♚)'}!`;
+      }
+
+      updateOnlineStatusUI(
+        `В сети • Комната ${roomCode} • Вы: ${playerColor === 'w' ? 'Белые (♔)' : 'Чёрные (♚)'}`,
+        true,
+        false
+      );
+      resetChessBoard(true, false);
+      for (const mv of existingMoves) {
+        if (mv && mv.from && mv.to) {
+          executeChessMove(mv.from.r, mv.from.c, mv.to.r, mv.to.c, {
+            fromRemote: true,
+            promotion: mv.promotion || 'archbishop'
+          });
+        }
+      }
+      subscribeMultiplayerRoom(roomCode);
       closeLobbyModal();
+      showNotificationToast(`🌐 Подключено к онлайн-комнате ${roomCode}!`);
       return true;
     }
 
@@ -5263,12 +5623,16 @@ export function initWizardChess() {
         completeCurrentMoveImmediately();
       }
       rebuildCurrentBoardMeshes();
+      impactFlashLight.color.setHex(0x2bc4ff);
       impactFlashLight.position.set(0, BOARD_SURFACE_Y + 0.65, 0);
-      impactFlashLight.intensity = 6.0;
+      impactFlashLight.intensity = 7.5;
+      setTimeout(() => {
+        impactFlashLight.color.setHex(0xffc978);
+      }, 650);
       renderer.shadowMap.needsUpdate = true;
       updateTurnUI();
       updateNewPiecesDockUI(
-        '✔ Обновление выполнено (v1.2.0): обычные фигуры, Всадники Демонов и 3D-модели синхронизированы!'
+        '✔ Обновление установлено (v1.3.0): обычные фигуры, Всадники Демонов и 3D-модели синхронизированы!'
       );
       const toast = document.getElementById('update-status-toast');
       if (toast) {
@@ -5359,9 +5723,1845 @@ export function initWizardChess() {
     }
 
     // =========================================================================
+    // 9 Comprehensive Gameplay, Audio, Boss Campaign & Tactical Upgrades
+    // =========================================================================
+    // 1) Web Audio Procedural Sound Synthesizer (Stone Slide, Shatter, Demon Roar, Cathedral Bell)
+    let soundEnabled = true;
+    let audioCtx = null;
+
+    function getAudioCtx() {
+      if (!soundEnabled) return null;
+      try {
+        if (!audioCtx) {
+          const Ctx = window.AudioContext || window.webkitAudioContext;
+          if (Ctx) audioCtx = new Ctx();
+        }
+        if (audioCtx && audioCtx.state === 'suspended') {
+          audioCtx.resume();
+        }
+        return audioCtx;
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function playSanctumSound(effect) {
+      const ctx = getAudioCtx();
+      if (!ctx) return;
+      const now = ctx.currentTime;
+      try {
+        if (effect === 'move' || effect === 'demon_move') {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = effect === 'demon_move' ? 'sawtooth' : 'triangle';
+          osc.frequency.setValueAtTime(effect === 'demon_move' ? 115 : 88, now);
+          osc.frequency.exponentialRampToValueAtTime(42, now + 0.24);
+          gain.gain.setValueAtTime(0.14, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.26);
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start(now);
+          osc.stop(now + 0.27);
+        } else if (effect === 'capture') {
+          for (const freq of [135, 72, 290]) {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = freq > 200 ? 'square' : 'sawtooth';
+            osc.frequency.setValueAtTime(freq, now);
+            osc.frequency.exponentialRampToValueAtTime(28, now + 0.42);
+            gain.gain.setValueAtTime(0.18, now);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + 0.44);
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start(now);
+            osc.stop(now + 0.45);
+          }
+        } else if (effect === 'ability') {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(260, now);
+          osc.frequency.exponentialRampToValueAtTime(680, now + 0.22);
+          osc.frequency.exponentialRampToValueAtTime(420, now + 0.48);
+          gain.gain.setValueAtTime(0.16, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.50);
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start(now);
+          osc.stop(now + 0.52);
+        } else if (effect === 'check' || effect === 'checkmate') {
+          const bellFreqs = effect === 'checkmate' ? [196, 293.66, 392, 587.33] : [220, 440];
+          for (const f of bellFreqs) {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(f, now);
+            gain.gain.setValueAtTime(0.12, now);
+            gain.gain.exponentialRampToValueAtTime(0.0008, now + 1.15);
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start(now);
+            osc.stop(now + 1.18);
+          }
+        }
+      } catch (e) {}
+    }
+
+    // 2) Active Piece Abilities (Hellfire Traps, Arcane Shields, Dragon Breath, Archbishop Blessing)
+    const activeBoardEffectsGroup = new THREE.Group();
+    scene.add(activeBoardEffectsGroup);
+    let activeTraps = [];   // { r, c, ownerColor, turnsLeft, mesh }
+    let activeShields = []; // { piece, turnsLeft, mesh }
+    let abilityCooldown = { w: 0, b: 0 };
+
+    function clearBoardTrapAndShieldMeshes() {
+      while (activeBoardEffectsGroup.children.length > 0) {
+        activeBoardEffectsGroup.remove(activeBoardEffectsGroup.children[0]);
+      }
+      activeTraps = [];
+      activeShields = [];
+      abilityCooldown = { w: 0, b: 0 };
+      capturedHistoryWhite = [];
+      capturedHistoryBlack = [];
+    }
+
+    function isMoveBlockedByTrapOrShield(moverPiece, destR, destC) {
+      // Enemy cannot step onto a Hellfire Trap
+      if (activeTraps.some((t) => t.r === destR && t.c === destC && t.ownerColor !== moverPiece.color && t.turnsLeft > 0)) {
+        return true;
+      }
+      // Enemy cannot capture a piece protected by an Arcane Shield
+      const target = boardState[destR]?.[destC];
+      if (target && target.color !== moverPiece.color) {
+        if (activeShields.some((s) => s.piece === target && s.turnsLeft > 0)) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    function tickAbilitiesOnTurnEnd() {
+      if (abilityCooldown[currentTurn] > 0) {
+        abilityCooldown[currentTurn] -= 1;
+      }
+      for (let i = activeTraps.length - 1; i >= 0; i--) {
+        activeTraps[i].turnsLeft -= 1;
+        if (activeTraps[i].turnsLeft <= 0) {
+          activeBoardEffectsGroup.remove(activeTraps[i].mesh);
+          activeTraps.splice(i, 1);
+        }
+      }
+      for (let i = activeShields.length - 1; i >= 0; i--) {
+        const sh = activeShields[i];
+        sh.turnsLeft -= 1;
+        if (sh.piece && sh.piece.mesh) {
+          sh.mesh.position.set(sh.piece.mesh.position.x, BOARD_SURFACE_Y + 0.24, sh.piece.mesh.position.z);
+        }
+        if (sh.turnsLeft <= 0 || !sh.piece || !boardState[sh.piece.r]?.[sh.piece.c]) {
+          activeBoardEffectsGroup.remove(sh.mesh);
+          activeShields.splice(i, 1);
+        }
+      }
+      updateAbilityButtonUI();
+    }
+
+    function updateAbilityButtonUI() {
+      const btn = document.getElementById('btn-ability-cast');
+      if (!btn) return;
+      const cd = abilityCooldown[playerColor] || 0;
+      if (cd > 0) {
+        btn.textContent = `⚡ Способность (${cd} х.)`;
+      } else {
+        btn.textContent = '⚡ Способность фигуры';
+      }
+    }
+
+    function castSelectedPieceAbility() {
+      if (isAnimatingMove || gameOver) return false;
+      const cd = abilityCooldown[currentTurn] || 0;
+      if (cd > 0) {
+        showNotificationToast(`Способность перезаряжается (осталось ходов: ${cd})`);
+        return false;
+      }
+      // Find selected friendly piece or pick the strongest special friendly piece on board
+      let targetPiece = null;
+      if (selectedSquare && boardState[selectedSquare.r]?.[selectedSquare.c]?.color === currentTurn) {
+        targetPiece = boardState[selectedSquare.r][selectedSquare.c];
+      } else {
+        for (let r = 0; r < 8; r++) {
+          for (let c = 0; c < 8; c++) {
+            const p = boardState[r][c];
+            if (p && p.color === currentTurn && ['demon_rider', 'dragon', 'wizard', 'archbishop', 'chancellor', 'queen'].includes(p.type)) {
+              targetPiece = p;
+              break;
+            }
+          }
+          if (targetPiece) break;
+        }
+      }
+      if (!targetPiece) {
+        showNotificationToast('Сначала выберите свою фигуру на доске для применения способности!');
+        return false;
+      }
+
+      playSanctumSound('ability');
+      const pos = boardToWorld(targetPiece.r, targetPiece.c);
+      abilityCooldown[currentTurn] = 2;
+
+      if (targetPiece.type === 'demon_rider') {
+        // Огненный след Бездны: ставит огненные ловушки вокруг всадника на 3 полухода
+        const trapDirs = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+        let placed = 0;
+        for (const [dr, dc] of trapDirs) {
+          const nr = targetPiece.r + dr;
+          const nc = targetPiece.c + dc;
+          if (nr >= 0 && nr < 8 && nc >= 0 && nc < 8 && !boardState[nr][nc]) {
+            const tPos = boardToWorld(nr, nc);
+            const ringGeo = new THREE.TorusGeometry(0.14, 0.022, 12, 28);
+            ringGeo.rotateX(Math.PI / 2);
+            const ringMat = new THREE.MeshBasicMaterial({ color: 0xff4500 });
+            const ringMesh = new THREE.Mesh(ringGeo, ringMat);
+            ringMesh.position.set(tPos.x, BOARD_SURFACE_Y + 0.02, tPos.z);
+            activeBoardEffectsGroup.add(ringMesh);
+            activeTraps.push({ r: nr, c: nc, ownerColor: currentTurn, turnsLeft: 3, mesh: ringMesh });
+            placed++;
+          }
+        }
+        impactFlashLight.color.setHex(0xff3b00);
+        impactFlashLight.position.set(pos.x, BOARD_SURFACE_Y + 0.55, pos.z);
+        impactFlashLight.intensity = 8.0;
+        showNotificationToast(`🔥 Всадник Демона создал ${placed || 1} огненных печатей Бездны вокруг себя!`);
+      } else if (targetPiece.type === 'dragon') {
+        // Дыхание Дракона: испепеляет ближайшую вражескую пешку/лёгкую фигуру в радиусе 2 клеток
+        let victim = null;
+        for (let dr = -2; dr <= 2; dr++) {
+          for (let dc = -2; dc <= 2; dc++) {
+            const nr = targetPiece.r + dr;
+            const nc = targetPiece.c + dc;
+            const occ = boardState[nr]?.[nc];
+            if (occ && occ.color !== currentTurn && occ.type !== 'king') {
+              if (!victim || PIECE_VALUES[occ.type] < PIECE_VALUES[victim.type]) {
+                victim = occ;
+              }
+            }
+          }
+        }
+        if (victim) {
+          const vPos = boardToWorld(victim.r, victim.c);
+          scene.remove(victim.mesh);
+          boardState[victim.r][victim.c] = null;
+          spawnStoneShatter(vPos, victim.color);
+          if (currentTurn === 'w') capturedByWhite += 1;
+          else capturedByBlack += 1;
+          recordCapturedPieceSymbol(currentTurn, victim.type);
+          showNotificationToast('🐉 Дыхание Дракона испепелило вражескую фигуру на расстоянии!');
+        } else {
+          // If no enemy in range, grant Dragon fire shield
+          grantArcaneShield(targetPiece, 0xff5500);
+          showNotificationToast('🐉 Дракон окутал себя Огненной Чешуёй (неуязвимость на 1 ход)!');
+        }
+      } else {
+        // Магический / Небесный Щит для выбранной фигуры
+        const shieldColor = targetPiece.type === 'wizard' ? 0x2bc4ff : 0xf5d76e;
+        grantArcaneShield(targetPiece, shieldColor);
+        const info = NEW_PIECE_INFO[targetPiece.type] || { ruName: 'Фигура' };
+        showNotificationToast(`🛡️ «${info.ruName}» защищена Магическим Щитом от взятия на следующий ход!`);
+      }
+
+      updateTurnUI();
+      updateAbilityButtonUI();
+      renderer.shadowMap.needsUpdate = true;
+      return true;
+    }
+
+    function grantArcaneShield(piece, hexColor = 0x2bc4ff) {
+      const pPos = boardToWorld(piece.r, piece.c);
+      const shGeo = new THREE.SphereGeometry(0.19, 18, 14);
+      const shMat = new THREE.MeshBasicMaterial({
+        color: hexColor,
+        transparent: true,
+        opacity: 0.28,
+        wireframe: true
+      });
+      const shMesh = new THREE.Mesh(shGeo, shMat);
+      shMesh.position.set(pPos.x, BOARD_SURFACE_Y + 0.24, pPos.z);
+      activeBoardEffectsGroup.add(shMesh);
+      activeShields.push({ piece, turnsLeft: 3, mesh: shMesh });
+      impactFlashLight.color.setHex(hexColor);
+      impactFlashLight.position.set(pPos.x, BOARD_SURFACE_Y + 0.5, pPos.z);
+      impactFlashLight.intensity = 7.0;
+    }
+
+    function showNotificationToast(msg) {
+      const toast = document.getElementById('update-status-toast');
+      if (toast) {
+        toast.textContent = msg;
+        toast.classList.add('visible');
+        setTimeout(() => {
+          toast.classList.remove('visible');
+        }, 3200);
+      }
+      updateNewPiecesDockUI(msg);
+    }
+
+    // 3) Dynamic Cathedral Reaction on Check
+    function triggerCathedralCheckReaction() {
+      playSanctumSound('check');
+      impactFlashLight.color.setHex(0xff1e00);
+      impactFlashLight.position.set(0, BOARD_SURFACE_Y + 0.85, 0);
+      impactFlashLight.intensity = 8.5;
+      setTimeout(() => {
+        impactFlashLight.color.setHex(0xffc978);
+      }, 900);
+    }
+
+    // 4) Undo Move & Best Move Hint
+    function handleUndoLastTurn() {
+      if (isAnimatingMove || moveHistory.length === 0) {
+        showNotificationToast('Нет ходов для отмены');
+        return false;
+      }
+      // Step back 2 plies in single-player so it returns to the player's turn, or 1 ply if only 1 move made
+      stepScriptBackward();
+      if (gameMode === 'single' && currentTurn !== playerColor && moveHistory.length > 0) {
+        stepScriptBackward();
+      }
+      playSanctumSound('move');
+      showNotificationToast('↶ Ход отменён');
+      return true;
+    }
+
+    function handleShowMoveHint() {
+      if (isAnimatingMove || gameOver) return false;
+      const best = chooseSmartAIMove(currentTurn, 'grandmaster');
+      if (!best) return false;
+      selectedSquare = { r: best.fromR, c: best.fromC };
+      validMoves = getLegalMovesForPiece(best.fromR, best.fromC);
+      showSquareHighlights(best.fromR, best.fromC, validMoves);
+
+      // Add a bright golden-cyan hint beacon on the recommended target square
+      const destPos = boardToWorld(best.toR, best.toC);
+      const hintGeo = new THREE.RingGeometry(0.08, 0.175, 32);
+      hintGeo.rotateX(-Math.PI / 2);
+      const hintMat = new THREE.MeshBasicMaterial({ color: 0x38d9ff, side: THREE.DoubleSide });
+      const hintMesh = new THREE.Mesh(hintGeo, hintMat);
+      hintMesh.position.set(destPos.x, BOARD_SURFACE_Y + 0.018, destPos.z);
+      squareHighlightsGroup.add(hintMesh);
+
+      const files = 'abcdefgh';
+      const piece = boardState[best.fromR][best.fromC];
+      const pInfo = NEW_PIECE_INFO[piece?.type] || { ruName: 'Фигура' };
+      const fromSq = `${files[best.fromC]}${8 - best.fromR}`;
+      const toSq = `${files[best.toC]}${8 - best.toR}`;
+      playSanctumSound('ability');
+      showNotificationToast(`💡 Совет Гроссмейстера: ${pInfo.ruName} ${fromSq} → ${toSq}`);
+      renderer.shadowMap.needsUpdate = true;
+      return best;
+    }
+
+    // 5) Power Balance Bar & Captured Graveyard Icons
+    let capturedHistoryWhite = [];
+    let capturedHistoryBlack = [];
+
+    function recordCapturedPieceSymbol(capturerColor, victimType) {
+      const icon = NEW_PIECE_INFO[victimType]?.icon || '♟';
+      if (capturerColor === 'w') capturedHistoryWhite.push(icon);
+      else capturedHistoryBlack.push(icon);
+    }
+
+    function updatePowerBalanceAndGraveyardUI(capturedTray) {
+      let wScore = 0;
+      let bScore = 0;
+      for (let r = 0; r < 8; r++) {
+        for (let c = 0; c < 8; c++) {
+          const p = boardState[r][c];
+          if (p && p.type !== 'king') {
+            const val = Math.round((PIECE_VALUES[p.type] || 100) / 100);
+            if (p.color === 'w') wScore += val;
+            else bScore += val;
+          }
+        }
+      }
+      const total = Math.max(1, wScore + bScore);
+      const wPct = Math.max(12, Math.min(88, Math.round((wScore / total) * 100)));
+      const fillEl = document.getElementById('power-bar-white-fill');
+      if (fillEl) {
+        fillEl.style.width = `${wPct}%`;
+      }
+      const scoreEl = document.getElementById('power-score-text');
+      if (scoreEl) {
+        scoreEl.textContent = `Сила армий — Белые: ${wScore} | Чёрные: ${bScore}`;
+      }
+      if (capturedTray) {
+        if (capturedHistoryWhite.length > 0 || capturedHistoryBlack.length > 0) {
+          const wIcons = capturedHistoryWhite.join(' ');
+          const bIcons = capturedHistoryBlack.join(' ');
+          capturedTray.textContent = `Трофеи Белых (${capturedByWhite}): ${wIcons || '—'}  |  Трофеи Чёрных (${capturedByBlack}): ${bIcons || '—'}`;
+        } else {
+          capturedTray.textContent = '';
+        }
+      }
+    }
+
+    // 6) Bosses & Campaign Mode («Испытания Собора»)
+    const CAMPAIGN_BOSSES = [
+      {
+        id: 'boss_1',
+        title: '1. Страж Паперти',
+        subtitle: 'Классический гарнизон собора против вашей армии',
+        aiPersona: 'guardian',
+        blackBackRow: ['rook', 'knight', 'bishop', 'queen', 'king', 'bishop', 'knight', 'rook'],
+        blackFrontRow: ['pawn', 'pawn', 'pawn', 'pawn', 'pawn', 'pawn', 'pawn', 'pawn']
+      },
+      {
+        id: 'boss_2',
+        title: '2. Ковен Архимага',
+        subtitle: 'Маги телепортации и Архиепископы Света',
+        aiPersona: 'grandmaster',
+        blackBackRow: ['chancellor', 'wizard', 'archbishop', 'queen', 'king', 'archbishop', 'wizard', 'chancellor'],
+        blackFrontRow: ['pawn', 'pawn', 'wizard', 'pawn', 'pawn', 'wizard', 'pawn', 'pawn']
+      },
+      {
+        id: 'boss_3',
+        title: '3. Всадники Апокалипсиса',
+        subtitle: 'Штурмовая кавалерия Всадников Демонов на обеих линиях',
+        aiPersona: 'demon',
+        blackBackRow: ['demon_rider', 'demon_rider', 'archbishop', 'queen', 'king', 'archbishop', 'demon_rider', 'demon_rider'],
+        blackFrontRow: ['pawn', 'demon_rider', 'pawn', 'pawn', 'pawn', 'pawn', 'demon_rider', 'pawn']
+      },
+      {
+        id: 'boss_4',
+        title: '4. Гнездо Древних Драконов',
+        subtitle: 'Крылатые Драконы и тяжёлые Канцлеры',
+        aiPersona: 'demon',
+        blackBackRow: ['dragon', 'chancellor', 'dragon', 'queen', 'king', 'dragon', 'chancellor', 'dragon'],
+        blackFrontRow: ['pawn', 'pawn', 'pawn', 'dragon', 'dragon', 'pawn', 'pawn', 'pawn']
+      },
+      {
+        id: 'boss_5',
+        title: '5. Владыка Бездны (Финал)',
+        subtitle: 'Легион Всадников Демонов, Драконов и Магов Бездны',
+        aiPersona: 'grandmaster',
+        blackBackRow: ['dragon', 'demon_rider', 'wizard', 'dragon', 'king', 'dragon', 'wizard', 'demon_rider'],
+        blackFrontRow: ['demon_rider', 'pawn', 'demon_rider', 'pawn', 'pawn', 'demon_rider', 'pawn', 'demon_rider']
+      }
+    ];
+    let activeCampaignBossIdx = -1;
+
+    function startCampaignBoss(bossIdx) {
+      const boss = CAMPAIGN_BOSSES[bossIdx];
+      if (!boss) return false;
+      activeCampaignBossIdx = bossIdx;
+      const personaIdx = AI_PERSONAS.findIndex((p) => p.id === boss.aiPersona);
+      if (personaIdx >= 0) currentAiPersonaIdx = personaIdx;
+      updateAiPersonaButtonUI();
+
+      playerColor = 'w';
+      resetChessBoard(true, false);
+
+      // Replace Black's lineup with the Boss formation
+      for (let r = 0; r <= 1; r++) {
+        for (let c = 0; c < 8; c++) {
+          if (boardState[r][c]?.mesh) {
+            scene.remove(boardState[r][c].mesh);
+          }
+          const type = r === 0 ? boss.blackBackRow[c] : boss.blackFrontRow[c];
+          boardState[r][c] = instantiatePiece(type, 'b', r, c);
+        }
+      }
+      updateTurnUI();
+      playSanctumSound('check');
+      showNotificationToast(`⚔ Начато испытание: «${boss.title}» — ${boss.subtitle}!`);
+      return true;
+    }
+
+    function notifyCampaignBossResult(winnerColor) {
+      if (activeCampaignBossIdx >= 0 && winnerColor === playerColor) {
+        const boss = CAMPAIGN_BOSSES[activeCampaignBossIdx];
+        showNotificationToast(`🏆 Босс «${boss.title}» повержен! Доступен следующий уровень испытаний!`);
+      }
+    }
+
+    function updateAiPersonaButtonUI() {
+      const btn = document.getElementById('btn-ai-persona');
+      if (btn) {
+        btn.textContent = AI_PERSONAS[currentAiPersonaIdx]?.ruLabel || 'ИИ: Гроссмейстер';
+      }
+    }
+
+    // 7) Custom Army Slot Builder (Click slot 0..7 in drawer to assign selected piece to player's back row)
+    function assignPieceToBackRowSlot(colIdx) {
+      if (colIdx < 0 || colIdx > 7) return false;
+      const homeRow = playerColor === 'b' ? 0 : 7;
+      if (boardState[homeRow][colIdx]?.type === 'king') {
+        showNotificationToast('Короля нельзя заменить в строю!');
+        return false;
+      }
+      const pType = selectedPromotionType || 'demon_rider';
+      ARMY_FORMATIONS[currentArmyFormationIdx].backRow[colIdx] = pType;
+      transmutePieceAt(homeRow, colIdx, pType);
+      updateTurnUI();
+      updateBackRowConstructorUI();
+      playSanctumSound('ability');
+      const info = NEW_PIECE_INFO[pType] || { ruName: 'Фигура' };
+      const files = 'abcdefgh';
+      showNotificationToast(`На линию ${files[colIdx]}${playerColor === 'w' ? 1 : 8} назначена фигура «${info.ruName}»!`);
+      return true;
+    }
+
+    function updateBackRowConstructorUI() {
+      const homeRow = playerColor === 'b' ? 0 : 7;
+      const files = 'abcdefgh';
+      for (let c = 0; c < 8; c++) {
+        const slotBtn = document.getElementById(`btn-army-slot-${c}`);
+        if (slotBtn) {
+          const piece = boardState[homeRow]?.[c];
+          const type = piece?.type || ARMY_FORMATIONS[currentArmyFormationIdx].backRow[c];
+          const icon = type === 'king' ? '♔' : (NEW_PIECE_INFO[type]?.icon || '♟');
+          slotBtn.textContent = `${files[c]}: ${icon}`;
+        }
+      }
+    }
+
+    // =========================================================================
+    // 10 Breathtaking 3D Sanctum Locations (including 2 Fiery Lava Realms)
+    // =========================================================================
+    const SANCTUM_LOCATIONS = [
+      {
+        id: 'cathedral',
+        idx: 0,
+        icon: '🏰',
+        ruName: 'Готический Собор Святилища',
+        shortName: 'Готический Собор',
+        badge: 'Классика',
+        isLava: false,
+        desc: 'Древний готический собор с высокими каменными сводами, витражами, парными огненными жаровнями и обсидиановым алтарём.',
+        bgHex: 0x070a12,
+        fogHex: 0x080b14,
+        fogDensity: 0.015,
+        hemiSky: 0xd8ccb8,
+        hemiGround: 0x261d14,
+        hemiInt: 0.62,
+        keyHex: 0xfff0d6,
+        keyInt: 2.55,
+        rimHex: 0xd8cbb8,
+        rimInt: 0.72,
+        brazierHex: 0xff8e32,
+        brazierInt: 4.35,
+        winSideHex: 0x90beff,
+        winNorthHex: 0x9bc4ff,
+        winSouthHex: 0xffb85c,
+        wallTint: [1.0, 1.0, 1.0],
+        floorTint: [1.0, 1.0, 1.0],
+        floorRough: 0.80,
+        floorMetal: 0.02,
+        lightSqHex: 0xdcd3c2,
+        darkSqHex: 0x14171f,
+        trimHex: 0xd4af37,
+        flameCore: [1.0, 0.96, 0.72],
+        flameMid: [1.0, 0.56, 0.10],
+        flameTip: [0.95, 0.20, 0.02],
+        particleHex: 0xffd27d,
+        particleCount: 90,
+        particleSpeedY: 0.18
+      },
+      {
+        id: 'lava_citadel',
+        idx: 1,
+        icon: '🌋',
+        ruName: 'Огненная Цитадель Лавы',
+        shortName: 'Цитадель Лавы',
+        badge: '🔥 ЛАВА',
+        isLava: true,
+        desc: 'Огненная локация с лавой #1: Пол превращён в бурлящее озеро раскалённой магмы! Вокруг алтаря бьют лавовые гейзеры, возвышаются базальтовые скалы с огненными трещинами и летят искры.',
+        bgHex: 0x1a0400,
+        fogHex: 0x260600,
+        fogDensity: 0.022,
+        hemiSky: 0xff7b29,
+        hemiGround: 0xff2200,
+        hemiInt: 0.95,
+        keyHex: 0xffaa44,
+        keyInt: 2.85,
+        rimHex: 0xff3300,
+        rimInt: 1.35,
+        brazierHex: 0xff4500,
+        brazierInt: 6.80,
+        winSideHex: 0xff3b00,
+        winNorthHex: 0xff5500,
+        winSouthHex: 0xff2200,
+        wallTint: [0.52, 0.24, 0.18],
+        floorTint: [0.45, 0.14, 0.08],
+        floorRough: 0.62,
+        floorMetal: 0.18,
+        lightSqHex: 0xf4c490,
+        darkSqHex: 0x1c0806,
+        trimHex: 0xff6a00,
+        flameCore: [1.0, 1.0, 0.85],
+        flameMid: [1.0, 0.42, 0.02],
+        flameTip: [0.95, 0.05, 0.0],
+        particleHex: 0xff5e00,
+        particleCount: 220,
+        particleSpeedY: 0.85
+      },
+      {
+        id: 'lava_forge',
+        idx: 2,
+        icon: '🔥',
+        ruName: 'Вулкан Кузницы Демонов',
+        shortName: 'Вулкан Кузницы',
+        badge: '🔥 ЛАВА',
+        isLava: true,
+        desc: 'Огненная локация с лавой #2: Жерло действующего вулкана Бездны! Реки жидкого пламени и расплавленного золота, гигантские раскалённые цепи, демонические наковальни и обсидиановые шипы.',
+        bgHex: 0x1f0700,
+        fogHex: 0x2c0901,
+        fogDensity: 0.024,
+        hemiSky: 0xffae34,
+        hemiGround: 0xff3300,
+        hemiInt: 1.05,
+        keyHex: 0xffc866,
+        keyInt: 3.10,
+        rimHex: 0xff5500,
+        rimInt: 1.50,
+        brazierHex: 0xff6a00,
+        brazierInt: 7.20,
+        winSideHex: 0xff6a00,
+        winNorthHex: 0xff8800,
+        winSouthHex: 0xff3300,
+        wallTint: [0.42, 0.22, 0.14],
+        floorTint: [0.38, 0.16, 0.06],
+        floorRough: 0.50,
+        floorMetal: 0.35,
+        lightSqHex: 0xffdf9e,
+        darkSqHex: 0x190b08,
+        trimHex: 0xff9d00,
+        flameCore: [1.0, 0.98, 0.80],
+        flameMid: [1.0, 0.65, 0.05],
+        flameTip: [1.0, 0.18, 0.0],
+        particleHex: 0xffae00,
+        particleCount: 240,
+        particleSpeedY: 1.05
+      },
+      {
+        id: 'ice_throne',
+        idx: 3,
+        icon: '❄️',
+        ruName: 'Ледяной Трон Севера',
+        shortName: 'Ледяной Трон',
+        badge: 'Мерзлота',
+        isLava: false,
+        desc: 'Чертог вечной мерзлоты под сиянием северной Авроры. Зеркальный ледяной пол, исполинские сапфировые кристаллы льда, морозное пламя и кружащаяся метель.',
+        bgHex: 0x031022,
+        fogHex: 0x061933,
+        fogDensity: 0.018,
+        hemiSky: 0xb8ecff,
+        hemiGround: 0x0c2c4d,
+        hemiInt: 0.88,
+        keyHex: 0xdff6ff,
+        keyInt: 2.75,
+        rimHex: 0x38bdf8,
+        rimInt: 1.25,
+        brazierHex: 0x00d4ff,
+        brazierInt: 5.40,
+        winSideHex: 0x38e8ff,
+        winNorthHex: 0x00ffcc,
+        winSouthHex: 0x38bdf8,
+        wallTint: [0.68, 0.88, 1.05],
+        floorTint: [0.62, 0.86, 1.05],
+        floorRough: 0.12,
+        floorMetal: 0.28,
+        lightSqHex: 0xe6f7ff,
+        darkSqHex: 0x0c223b,
+        trimHex: 0x6ce5ff,
+        flameCore: [0.90, 0.99, 1.0],
+        flameMid: [0.20, 0.82, 1.0],
+        flameTip: [0.02, 0.38, 0.95],
+        particleHex: 0xb8f2ff,
+        particleCount: 180,
+        particleSpeedY: -0.42
+      },
+      {
+        id: 'necropolis',
+        idx: 4,
+        icon: '💀',
+        ruName: 'Некрополь Короля Лича',
+        shortName: 'Некрополь Лича',
+        badge: 'Некромантия',
+        isLava: false,
+        desc: 'Подземный склеп проклятых королей. Жаровни горят ядовито-изумрудным некро-пламенем, вокруг доски парят чёрные обелиски душ и светится ритуальный круг.',
+        bgHex: 0x03120b,
+        fogHex: 0x051c11,
+        fogDensity: 0.021,
+        hemiSky: 0x6ee7b7,
+        hemiGround: 0x062417,
+        hemiInt: 0.72,
+        keyHex: 0xa7f3d0,
+        keyInt: 2.35,
+        rimHex: 0x10b981,
+        rimInt: 1.30,
+        brazierHex: 0x10ff68,
+        brazierInt: 5.80,
+        winSideHex: 0x10b981,
+        winNorthHex: 0x34d399,
+        winSouthHex: 0x059669,
+        wallTint: [0.42, 0.62, 0.50],
+        floorTint: [0.34, 0.52, 0.42],
+        floorRough: 0.68,
+        floorMetal: 0.12,
+        lightSqHex: 0xcce8db,
+        darkSqHex: 0x091912,
+        trimHex: 0x34d399,
+        flameCore: [0.85, 1.0, 0.88],
+        flameMid: [0.12, 0.95, 0.42],
+        flameTip: [0.02, 0.48, 0.22],
+        particleHex: 0x34ff88,
+        particleCount: 160,
+        particleSpeedY: 0.48
+      },
+      {
+        id: 'astral_observatory',
+        idx: 5,
+        icon: '🌌',
+        ruName: 'Астральная Обсерватория Магов',
+        shortName: 'Обсерватория Магов',
+        badge: 'Космос',
+        isLava: false,
+        desc: 'Святилище архимагов посреди звёздной туманности. Вокруг шахматной доски вращаются гигантские золотые кольца армиллярной сферы и парят кристаллы эфира.',
+        bgHex: 0x060417,
+        fogHex: 0x0a0624,
+        fogDensity: 0.016,
+        hemiSky: 0xc4b5fd,
+        hemiGround: 0x1e1040,
+        hemiInt: 0.82,
+        keyHex: 0xede9fe,
+        keyInt: 2.65,
+        rimHex: 0x8b5cf6,
+        rimInt: 1.35,
+        brazierHex: 0xa855f7,
+        brazierInt: 5.60,
+        winSideHex: 0x818cf8,
+        winNorthHex: 0xc084fc,
+        winSouthHex: 0x38bdf8,
+        wallTint: [0.64, 0.58, 0.92],
+        floorTint: [0.48, 0.42, 0.78],
+        floorRough: 0.26,
+        floorMetal: 0.32,
+        lightSqHex: 0xe9d5ff,
+        darkSqHex: 0x130d26,
+        trimHex: 0xc084fc,
+        flameCore: [0.95, 0.90, 1.0],
+        flameMid: [0.68, 0.32, 1.0],
+        flameTip: [0.22, 0.58, 1.0],
+        particleHex: 0xd8b4fe,
+        particleCount: 200,
+        particleSpeedY: 0.22
+      },
+      {
+        id: 'emerald_temple',
+        idx: 6,
+        icon: '🌿',
+        ruName: 'Изумрудный Храм Древних',
+        shortName: 'Изумрудный Храм',
+        badge: 'Древние',
+        isLava: false,
+        desc: 'Затерянный подземный храм, озарённый гигантскими биолюминесцентными изумрудами, древними золотыми тотемами и парящими светлячками.',
+        bgHex: 0x041712,
+        fogHex: 0x07221b,
+        fogDensity: 0.017,
+        hemiSky: 0xa7f3d0,
+        hemiGround: 0x1c2e24,
+        hemiInt: 0.80,
+        keyHex: 0xfef08a,
+        keyInt: 2.70,
+        rimHex: 0x10b981,
+        rimInt: 1.15,
+        brazierHex: 0xfbbf24,
+        brazierInt: 5.10,
+        winSideHex: 0x34d399,
+        winNorthHex: 0xfde047,
+        winSouthHex: 0x10b981,
+        wallTint: [0.68, 0.86, 0.74],
+        floorTint: [0.56, 0.76, 0.62],
+        floorRough: 0.58,
+        floorMetal: 0.14,
+        lightSqHex: 0xe2f2e8,
+        darkSqHex: 0x0b211a,
+        trimHex: 0xfbbf24,
+        flameCore: [1.0, 0.98, 0.78],
+        flameMid: [0.25, 0.92, 0.58],
+        flameTip: [0.05, 0.55, 0.35],
+        particleHex: 0xfde047,
+        particleCount: 150,
+        particleSpeedY: 0.28
+      },
+      {
+        id: 'blood_arena',
+        idx: 7,
+        icon: '🩸',
+        ruName: 'Кровавая Арена Вальхаллы',
+        shortName: 'Арена Вальхаллы',
+        badge: 'Битва',
+        isLava: false,
+        desc: 'Багровый чертог павших героев под сиянием Кровавой Луны. Вокруг поля боя вонзены исполинские двуручные мечи титанов, а жаровни пылают алым огнём.',
+        bgHex: 0x1a0307,
+        fogHex: 0x26050b,
+        fogDensity: 0.020,
+        hemiSky: 0xfda4af,
+        hemiGround: 0x33060d,
+        hemiInt: 0.84,
+        keyHex: 0xfecdd3,
+        keyInt: 2.65,
+        rimHex: 0xf43f5e,
+        rimInt: 1.40,
+        brazierHex: 0xe11d48,
+        brazierInt: 6.20,
+        winSideHex: 0xf43f5e,
+        winNorthHex: 0xe11d48,
+        winSouthHex: 0xfb7185,
+        wallTint: [0.66, 0.34, 0.38],
+        floorTint: [0.54, 0.24, 0.28],
+        floorRough: 0.56,
+        floorMetal: 0.22,
+        lightSqHex: 0xf5d0d6,
+        darkSqHex: 0x1f070c,
+        trimHex: 0xf43f5e,
+        flameCore: [1.0, 0.88, 0.90],
+        flameMid: [0.98, 0.12, 0.26],
+        flameTip: [0.55, 0.02, 0.08],
+        particleHex: 0xfb7185,
+        particleCount: 170,
+        particleSpeedY: 0.55
+      },
+      {
+        id: 'golden_palace',
+        idx: 8,
+        icon: '👑',
+        ruName: 'Золотой Чертог Императора',
+        shortName: 'Золотой Чертог',
+        badge: 'Империя',
+        isLava: false,
+        desc: 'Ослепительный тронный зал из белого мрамора и чистого золота, залитый солнечным светом. Над алтарём парят короны света и золотые арки триумфа.',
+        bgHex: 0x171206,
+        fogHex: 0x211a08,
+        fogDensity: 0.014,
+        hemiSky: 0xfef3c7,
+        hemiGround: 0x45320f,
+        hemiInt: 0.96,
+        keyHex: 0xfffbeb,
+        keyInt: 3.05,
+        rimHex: 0xf59e0b,
+        rimInt: 1.25,
+        brazierHex: 0xfbbf24,
+        brazierInt: 5.50,
+        winSideHex: 0xfde68a,
+        winNorthHex: 0xfbbf24,
+        winSouthHex: 0xf59e0b,
+        wallTint: [1.08, 0.98, 0.78],
+        floorTint: [1.06, 0.95, 0.75],
+        floorRough: 0.22,
+        floorMetal: 0.38,
+        lightSqHex: 0xfffbeb,
+        darkSqHex: 0x291f0c,
+        trimHex: 0xfacc15,
+        flameCore: [1.0, 1.0, 0.92],
+        flameMid: [1.0, 0.82, 0.22],
+        flameTip: [0.95, 0.52, 0.05],
+        particleHex: 0xfde047,
+        particleCount: 150,
+        particleSpeedY: 0.25
+      },
+      {
+        id: 'shadow_abyss',
+        idx: 9,
+        icon: '🔮',
+        ruName: 'Трон Бездны и Теней',
+        shortName: 'Трон Бездны',
+        badge: 'Пустота',
+        isLava: false,
+        desc: 'Запредельное измерение фиолетового разлома Пустоты. Вокруг алтаря левитируют расколотые обсидиановые монолиты, вращаются порталы и пылает неоново-пурпурный огонь.',
+        bgHex: 0x090214,
+        fogHex: 0x110424,
+        fogDensity: 0.020,
+        hemiSky: 0xe879f9,
+        hemiGround: 0x1f0538,
+        hemiInt: 0.78,
+        keyHex: 0xf5d0fe,
+        keyInt: 2.55,
+        rimHex: 0xd946ef,
+        rimInt: 1.45,
+        brazierHex: 0xd946ef,
+        brazierInt: 6.10,
+        winSideHex: 0xc026d3,
+        winNorthHex: 0xe879f9,
+        winSouthHex: 0x9333ea,
+        wallTint: [0.52, 0.32, 0.68],
+        floorTint: [0.42, 0.24, 0.56],
+        floorRough: 0.32,
+        floorMetal: 0.30,
+        lightSqHex: 0xf3e8ff,
+        darkSqHex: 0x11051f,
+        trimHex: 0xe879f9,
+        flameCore: [1.0, 0.88, 1.0],
+        flameMid: [0.88, 0.18, 0.96],
+        flameTip: [0.45, 0.04, 0.72],
+        particleHex: 0xf0abfc,
+        particleCount: 185,
+        particleSpeedY: 0.52
+      }
+    ];
+
+    let currentLocationIdx = 0;
+    const locationPropsGroup = new THREE.Group();
+    scene.add(locationPropsGroup);
+    const lavaShaderUniforms = [];
+    const locationAnimatedObjects = [];
+    let locationParticleSystem = null;
+
+    function createMoltenLavaShader(opts = {}) {
+      const uniforms = {
+        uTime: { value: 0 },
+        uScale: { value: opts.scale || 0.38 },
+        uSpeed: { value: opts.speed || 0.55 },
+        uIsGoldForge: { value: opts.isGoldForge ? 1.0 : 0.0 }
+      };
+      lavaShaderUniforms.push(uniforms);
+
+      return new THREE.ShaderMaterial({
+        uniforms,
+        vertexShader: `
+          uniform float uTime;
+          varying vec3 vWorldPos;
+          varying vec2 vUv;
+          void main() {
+            vUv = uv;
+            vec3 pos = position;
+            vec4 worldPos = modelMatrix * vec4(pos, 1.0);
+            float distCenter = length(worldPos.xz);
+            float canWave = smoothstep(2.1, 3.2, distCenter);
+            float wave = (
+              sin(worldPos.x * 1.4 + uTime * 2.1) * 0.055 +
+              cos(worldPos.z * 1.2 - uTime * 1.8) * 0.055
+            ) * canWave;
+            worldPos.y += wave;
+            vWorldPos = worldPos.xyz;
+            gl_Position = projectionMatrix * viewMatrix * worldPos;
+          }
+        `,
+        fragmentShader: `
+          uniform float uTime;
+          uniform float uScale;
+          uniform float uSpeed;
+          uniform float uIsGoldForge;
+          varying vec3 vWorldPos;
+          varying vec2 vUv;
+
+          float hash2(vec2 p) {
+            p = fract(p * vec2(123.34, 456.21));
+            p += dot(p, p + 45.32);
+            return fract(p.x * p.y);
+          }
+
+          float noise2(vec2 p) {
+            vec2 i = floor(p);
+            vec2 f = fract(p);
+            f = f * f * (3.0 - 2.0 * f);
+            float a = hash2(i);
+            float b = hash2(i + vec2(1.0, 0.0));
+            float c = hash2(i + vec2(0.0, 1.0));
+            float d = hash2(i + vec2(1.0, 1.0));
+            return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+          }
+
+          float fbm(vec2 p) {
+            float v = 0.0;
+            float amp = 0.5;
+            for (int i = 0; i < 4; i++) {
+              v += amp * noise2(p);
+              p = p * 2.03 + vec2(1.7, -1.3);
+              amp *= 0.5;
+            }
+            return v;
+          }
+
+          void main() {
+            vec2 p = vWorldPos.xz * uScale;
+            float t = uTime * uSpeed;
+            vec2 q = vec2(
+              fbm(p + vec2(t * 0.35, -t * 0.25)),
+              fbm(p + vec2(-t * 0.30, t * 0.40))
+            );
+            float n = fbm(p + q * 2.2 + vec2(0.0, -t * 0.45));
+            float veins = abs(sin((n + q.x * 0.5) * 9.5 + t * 1.4));
+            float magmaGlow = smoothstep(0.18, 0.92, 1.0 - veins);
+
+            vec3 crustCol = vec3(0.07, 0.02, 0.015);
+            vec3 darkMagma = mix(vec3(0.75, 0.08, 0.01), vec3(0.85, 0.22, 0.01), uIsGoldForge);
+            vec3 midLava = mix(vec3(1.0, 0.38, 0.02), vec3(1.0, 0.62, 0.04), uIsGoldForge);
+            vec3 hotCore = vec3(1.0, 0.95, 0.58) * 1.65;
+
+            vec3 col = mix(crustCol, darkMagma, smoothstep(0.15, 0.50, n + magmaGlow * 0.4));
+            col = mix(col, midLava, smoothstep(0.42, 0.78, magmaGlow));
+            col = mix(col, hotCore, smoothstep(0.76, 0.98, magmaGlow));
+
+            // Fade softly near far room boundaries
+            float edgeFade = 1.0 - smoothstep(14.5, 18.2, max(abs(vWorldPos.x * 2.2), abs(vWorldPos.z)));
+            gl_FragColor = vec4(col, clamp(edgeFade, 0.85, 1.0));
+          }
+        `
+      });
+    }
+
+    function clearLocationProps() {
+      while (locationPropsGroup.children.length > 0) {
+        const ch = locationPropsGroup.children[0];
+        locationPropsGroup.remove(ch);
+      }
+      lavaShaderUniforms.length = 0;
+      locationAnimatedObjects.length = 0;
+      locationParticleSystem = null;
+    }
+
+    function spawnLocationParticles(loc) {
+      const count = loc.particleCount || 140;
+      const positions = new Float32Array(count * 3);
+      const phases = new Float32Array(count);
+      for (let i = 0; i < count; i++) {
+        positions[i * 3] = (Math.random() - 0.5) * 11.5;
+        positions[i * 3 + 1] = 0.25 + Math.random() * 7.8;
+        positions[i * 3 + 2] = (Math.random() - 0.5) * 26.0;
+        phases[i] = Math.random() * Math.PI * 2;
+      }
+      const pGeo = new THREE.BufferGeometry();
+      pGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      const pMat = new THREE.PointsMaterial({
+        color: loc.particleHex,
+        size: loc.isLava ? 0.11 : 0.085,
+        transparent: true,
+        opacity: loc.isLava ? 0.92 : 0.78,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
+      });
+      const pts = new THREE.Points(pGeo, pMat);
+      locationPropsGroup.add(pts);
+      locationParticleSystem = {
+        points: pts,
+        phases,
+        speedY: loc.particleSpeedY || 0.35,
+        count
+      };
+    }
+
+    function buildLocationEnvironment3D(loc) {
+      clearLocationProps();
+      spawnLocationParticles(loc);
+
+      // Hide the Gothic Cathedral GLB mesh in all non-cathedral locations so each of the 10 rooms has its own distinct 3D architecture!
+      if (cathedralRootMesh) {
+        cathedralRootMesh.visible = loc.id === 'cathedral';
+      }
+
+      if (loc.id === 'cathedral') {
+        return;
+      }
+
+      // Common central pedestal under the chessboard (since cathedralRoot is hidden in locations 1..9)
+      const daisMat = new THREE.MeshStandardMaterial({
+        color: loc.darkSqHex,
+        roughness: 0.45,
+        metalness: 0.35
+      });
+      const daisTrimMat = new THREE.MeshStandardMaterial({
+        color: loc.trimHex,
+        roughness: 0.25,
+        metalness: 0.85,
+        emissive: loc.brazierHex,
+        emissiveIntensity: 0.35
+      });
+      const centralDais = new THREE.Mesh(new THREE.BoxGeometry(3.85, 0.72, 3.85), daisMat);
+      centralDais.position.set(0, 0.36, 0);
+      centralDais.receiveShadow = true;
+      locationPropsGroup.add(centralDais);
+
+      const daisStep = new THREE.Mesh(new THREE.BoxGeometry(4.45, 0.24, 4.45), daisTrimMat);
+      daisStep.position.set(0, 0.12, 0);
+      daisStep.receiveShadow = true;
+      locationPropsGroup.add(daisStep);
+
+      if (loc.id === 'lava_citadel') {
+        // 🌋 LAVA LOCATION #1: Open Volcanic Caldera Caverns with Molten Magma Sea, Basalt Bridges, Erupting Geysers & Cavern Roof Stalactites
+        const lavaMat = createMoltenLavaShader({ scale: 0.42, speed: 0.68, isGoldForge: false });
+        const lavaSeaGeo = new THREE.PlaneGeometry(38.0, 46.0, 64, 80);
+        lavaSeaGeo.rotateX(-Math.PI / 2);
+        const lavaSea = new THREE.Mesh(lavaSeaGeo, lavaMat);
+        lavaSea.position.set(0, 0.04, 0);
+        locationPropsGroup.add(lavaSea);
+
+        // Obsidian Volcanic Cavern Dome & Jagged Crater Rim Walls
+        const cavernRockMat = new THREE.MeshStandardMaterial({
+          color: 0x140705,
+          roughness: 0.88,
+          metalness: 0.15,
+          emissive: 0x380800,
+          emissiveIntensity: 0.42,
+          side: THREE.DoubleSide
+        });
+        const calderaWall = new THREE.Mesh(
+          new THREE.CylinderGeometry(14.5, 16.5, 15.0, 24, 6, true),
+          cavernRockMat
+        );
+        calderaWall.position.set(0, 6.8, 0);
+        locationPropsGroup.add(calderaWall);
+
+        // Glowing Magma Moat Rim around the central Obsidian Altar
+        const moatMat = new THREE.MeshBasicMaterial({
+          color: 0xff5500,
+          side: THREE.DoubleSide,
+          transparent: true,
+          opacity: 0.88,
+          blending: THREE.AdditiveBlending
+        });
+        const moatRing = new THREE.Mesh(new THREE.RingGeometry(2.55, 3.35, 48), moatMat);
+        moatRing.rotation.x = -Math.PI / 2;
+        moatRing.position.set(0, 0.09, 0);
+        locationPropsGroup.add(moatRing);
+        locationAnimatedObjects.push((t) => {
+          moatRing.scale.setScalar(1.0 + Math.sin(t * 3.2) * 0.05);
+        });
+
+        // 4 Erupting Lava Geyser Columns pouring molten magma from the upper volcanic ceiling
+        const geyserCoords = [
+          [-5.2, -5.2],
+          [5.2, -5.2],
+          [-5.2, 5.2],
+          [5.2, 5.2]
+        ];
+        const geyserMat = createMoltenLavaShader({ scale: 0.85, speed: 1.95, isGoldForge: false });
+        for (let i = 0; i < geyserCoords.length; i++) {
+          const [gx, gz] = geyserCoords[i];
+          const gCol = new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.62, 12.5, 24, 16, true), geyserMat);
+          gCol.position.set(gx, 6.2, gz);
+          locationPropsGroup.add(gCol);
+
+          const splashRing = new THREE.Mesh(
+            new THREE.TorusGeometry(0.85, 0.12, 12, 32),
+            new THREE.MeshBasicMaterial({ color: 0xff7700 })
+          );
+          splashRing.rotation.x = Math.PI / 2;
+          splashRing.position.set(gx, 0.14, gz);
+          locationPropsGroup.add(splashRing);
+          locationAnimatedObjects.push((t) => {
+            gCol.rotation.y = t * 1.2 * (i % 2 === 0 ? 1 : -1);
+            splashRing.scale.setScalar(1.0 + Math.sin(t * 5.0 + i) * 0.16);
+          });
+        }
+
+        // 16 Jagged Volcanic Basalt Spires & Hanging Ceiling Stalactites
+        const veinMat = new THREE.MeshBasicMaterial({ color: 0xff4500 });
+        for (let i = 0; i < 16; i++) {
+          const ang = (i / 16) * Math.PI * 2;
+          const rad = i % 2 === 0 ? 6.8 : 9.6;
+          const sx = Math.cos(ang) * rad;
+          const sz = Math.sin(ang) * (rad * 1.15);
+          const sh = 2.4 + (i % 4) * 0.95;
+
+          const spireGroup = new THREE.Group();
+          spireGroup.position.set(sx, 0.02, sz);
+          const mainCone = new THREE.Mesh(new THREE.ConeGeometry(0.75, sh, 6), cavernRockMat);
+          mainCone.position.y = sh * 0.5;
+          const magmaRing = new THREE.Mesh(new THREE.TorusGeometry(0.48, 0.05, 8, 18), veinMat);
+          magmaRing.rotation.x = Math.PI / 2;
+          magmaRing.position.y = sh * 0.35;
+          spireGroup.add(mainCone, magmaRing);
+          locationPropsGroup.add(spireGroup);
+
+          // Hanging volcanic stalactite from cavern roof
+          const stal = new THREE.Mesh(new THREE.ConeGeometry(0.55, 2.8, 6), cavernRockMat);
+          stal.position.set(sx * 0.85, 11.2, sz * 0.85);
+          stal.rotation.x = Math.PI;
+          locationPropsGroup.add(stal);
+        }
+      } else if (loc.id === 'lava_forge') {
+        // 🔥 LAVA LOCATION #2: Demon Forge Volcano — Colossal Iron Blast-Furnace Rotunda, Liquid Gold-Lava River, 8 Giant Hell-Chains & 4 Runic Anvils
+        const forgeLavaMat = createMoltenLavaShader({ scale: 0.52, speed: 0.95, isGoldForge: true });
+        const craterLake = new THREE.Mesh(new THREE.PlaneGeometry(38.0, 46.0, 64, 80), forgeLavaMat);
+        craterLake.rotation.x = -Math.PI / 2;
+        craterLake.position.set(0, 0.04, 0);
+        locationPropsGroup.add(craterLake);
+
+        const chainIronMat = new THREE.MeshStandardMaterial({
+          color: 0x1c1210,
+          roughness: 0.32,
+          metalness: 0.90,
+          emissive: 0xff3b00,
+          emissiveIntensity: 0.55
+        });
+
+        // Octagonal Obsidian-Iron Forge Bastion Walls & Giant Furnace Pillars
+        for (let i = 0; i < 8; i++) {
+          const ang = (i / 8) * Math.PI * 2 + Math.PI / 8;
+          const px = Math.cos(ang) * 10.5;
+          const pz = Math.sin(ang) * 10.5;
+          const furnacePillar = new THREE.Mesh(new THREE.BoxGeometry(1.6, 12.0, 1.6), chainIronMat);
+          furnacePillar.position.set(px, 6.0, pz);
+          furnacePillar.lookAt(0, 6.0, 0);
+          locationPropsGroup.add(furnacePillar);
+
+          // Glowing Molten Slag Chute on each Furnace Pillar
+          const chute = new THREE.Mesh(
+            new THREE.PlaneGeometry(0.55, 10.5),
+            new THREE.MeshBasicMaterial({ color: 0xff9d00, side: THREE.DoubleSide })
+          );
+          chute.position.set(px * 0.91, 5.5, pz * 0.91);
+          chute.lookAt(0, 5.5, 0);
+          locationPropsGroup.add(chute);
+        }
+
+        // Giant Overhead Crucible Ring suspended above the board
+        const crucibleRing = new THREE.Mesh(new THREE.TorusGeometry(6.2, 0.55, 16, 48), chainIronMat);
+        crucibleRing.rotation.x = Math.PI / 2;
+        crucibleRing.position.set(0, 8.8, 0);
+        locationPropsGroup.add(crucibleRing);
+
+        // Concentric Molten Gold Forge Rings around the Altar
+        for (const rad of [2.75, 3.65, 4.65]) {
+          const forgeRing = new THREE.Mesh(
+            new THREE.TorusGeometry(rad, 0.075, 12, 64),
+            new THREE.MeshBasicMaterial({ color: 0xffae00 })
+          );
+          forgeRing.rotation.x = Math.PI / 2;
+          forgeRing.position.set(0, 0.12, 0);
+          locationPropsGroup.add(forgeRing);
+          locationAnimatedObjects.push((t) => {
+            forgeRing.rotation.z = t * (rad > 3.5 ? -0.35 : 0.45);
+          });
+        }
+
+        // 4 Giant Forged Hell-Chains stretching from the upper Crucible to the Altar corners
+        const chainCorners = [
+          [-2.2, -2.1, -6.2, -6.2],
+          [2.2, -2.1, 6.2, -6.2],
+          [-2.2, 2.1, -6.2, 6.2],
+          [2.2, 2.1, 6.2, 6.2]
+        ];
+        for (const [x0, z0, x1, z1] of chainCorners) {
+          const startV = new THREE.Vector3(x0, 0.65, z0);
+          const endV = new THREE.Vector3(x1, 8.6, z1);
+          const links = 16;
+          for (let k = 0; k <= links; k++) {
+            const u = k / links;
+            const pos = new THREE.Vector3().lerpVectors(startV, endV, u);
+            const linkMesh = new THREE.Mesh(new THREE.TorusGeometry(0.22, 0.055, 10, 20), chainIronMat);
+            linkMesh.position.copy(pos);
+            linkMesh.rotation.set(0.6, k % 2 === 0 ? 0 : Math.PI / 2, 0.4);
+            locationPropsGroup.add(linkMesh);
+          }
+        }
+
+        // 4 Demonic Runic Anvils with Floating Molten Cores
+        const anvilCoords = [
+          [-4.2, -3.9],
+          [4.2, -3.9],
+          [-4.2, 3.9],
+          [4.2, 3.9]
+        ];
+        for (let i = 0; i < anvilCoords.length; i++) {
+          const [ax, az] = anvilCoords[i];
+          const anvilGrp = new THREE.Group();
+          anvilGrp.position.set(ax, 0.08, az);
+          const basePed = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.65, 0.85), chainIronMat);
+          basePed.position.y = 0.32;
+          const topHorn = new THREE.Mesh(new THREE.ConeGeometry(0.48, 1.25, 4), chainIronMat);
+          topHorn.rotation.z = Math.PI / 2;
+          topHorn.position.y = 0.78;
+          const moltenOrb = new THREE.Mesh(
+            new THREE.OctahedronGeometry(0.32, 1),
+            new THREE.MeshBasicMaterial({ color: 0xffaa00 })
+          );
+          moltenOrb.position.y = 1.45;
+          anvilGrp.add(basePed, topHorn, moltenOrb);
+          locationPropsGroup.add(anvilGrp);
+          locationAnimatedObjects.push((t) => {
+            moltenOrb.rotation.y = t * 2.4 + i;
+            moltenOrb.position.y = 1.45 + Math.sin(t * 3.8 + i) * 0.14;
+          });
+        }
+      } else if (loc.id === 'ice_throne') {
+        // ❄️ LOCATION #4: Frozen Ice Throne — Mirror Glacier Lake, 16 Colossal Sapphire Ice Spires, Ice Archways & Northern Lights Aurora
+        const glacierFloorMat = new THREE.MeshStandardMaterial({
+          color: 0x082038,
+          roughness: 0.08,
+          metalness: 0.55,
+          emissive: 0x062848,
+          emissiveIntensity: 0.45
+        });
+        const glacierFloor = new THREE.Mesh(new THREE.PlaneGeometry(40, 48), glacierFloorMat);
+        glacierFloor.rotation.x = -Math.PI / 2;
+        glacierFloor.position.set(0, 0.02, 0);
+        glacierFloor.receiveShadow = true;
+        locationPropsGroup.add(glacierFloor);
+
+        const iceCrystalMat = new THREE.MeshStandardMaterial({
+          color: 0xa5f3fc,
+          roughness: 0.06,
+          metalness: 0.30,
+          emissive: 0x0284c7,
+          emissiveIntensity: 0.95,
+          transparent: true,
+          opacity: 0.88
+        });
+
+        // Giant Frozen Snowflake Mandala on the glacier floor
+        for (const rad of [3.2, 5.2, 7.6]) {
+          const frostRing = new THREE.Mesh(
+            new THREE.RingGeometry(rad - 0.15, rad, 6),
+            new THREE.MeshBasicMaterial({ color: 0x38bdf8, side: THREE.DoubleSide, transparent: true, opacity: 0.65 })
+          );
+          frostRing.rotation.x = -Math.PI / 2;
+          frostRing.position.set(0, 0.05, 0);
+          locationPropsGroup.add(frostRing);
+          locationAnimatedObjects.push((t) => {
+            frostRing.rotation.z = t * (rad > 5 ? -0.18 : 0.25);
+          });
+        }
+
+        // 16 Towering Ice Fortress Crystal Pillars & Frozen Crystalline Arches
+        for (let i = 0; i < 16; i++) {
+          const ang = (i / 16) * Math.PI * 2;
+          const rad = i % 2 === 0 ? 5.6 : 9.2;
+          const cx = Math.cos(ang) * rad;
+          const cz = Math.sin(ang) * rad;
+          const h = i % 2 === 0 ? 4.8 : 8.5;
+          const spire = new THREE.Mesh(new THREE.ConeGeometry(0.68, h, 6), iceCrystalMat);
+          spire.position.set(cx, h * 0.5, cz);
+          spire.rotation.z = (cx > 0 ? -1 : 1) * 0.12;
+          locationPropsGroup.add(spire);
+        }
+
+        // Northern Lights (Aurora Borealis) Ribbon Curtains in the sky
+        for (let a = 0; a < 3; a++) {
+          const auroraRibbon = new THREE.Mesh(
+            new THREE.CylinderGeometry(12.5 + a * 1.8, 12.5 + a * 1.8, 3.2, 48, 1, true),
+            new THREE.MeshBasicMaterial({
+              color: a === 1 ? 0x00ffcc : 0x38bdf8,
+              side: THREE.DoubleSide,
+              transparent: true,
+              opacity: 0.24,
+              blending: THREE.AdditiveBlending
+            })
+          );
+          auroraRibbon.position.set(0, 8.2 + a * 1.4, 0);
+          locationPropsGroup.add(auroraRibbon);
+          locationAnimatedObjects.push((t) => {
+            auroraRibbon.rotation.y = t * 0.15 * (a % 2 === 0 ? 1 : -1);
+            auroraRibbon.position.y = 8.2 + a * 1.4 + Math.sin(t * 1.5 + a) * 0.35;
+          });
+        }
+      } else if (loc.id === 'necropolis') {
+        // 💀 LOCATION #5: Necropolis of the Lich King — Underground Soul Crypt, 12 Necromantic Obelisks, Ribcage Vault Arches & Emerald Soul Pool
+        const cryptFloorMat = new THREE.MeshStandardMaterial({
+          color: 0x05140d,
+          roughness: 0.55,
+          metalness: 0.25,
+          emissive: 0x062e1e,
+          emissiveIntensity: 0.45
+        });
+        const cryptFloor = new THREE.Mesh(new THREE.PlaneGeometry(40, 48), cryptFloorMat);
+        cryptFloor.rotation.x = -Math.PI / 2;
+        cryptFloor.position.set(0, 0.02, 0);
+        locationPropsGroup.add(cryptFloor);
+
+        const necroMat = new THREE.MeshStandardMaterial({
+          color: 0x0a1912,
+          roughness: 0.30,
+          metalness: 0.50,
+          emissive: 0x10b981,
+          emissiveIntensity: 0.72
+        });
+
+        // Concentric Necromantic Runic Ritual Circles
+        for (const rad of [2.95, 4.45, 6.85]) {
+          const sigilRing = new THREE.Mesh(
+            new THREE.TorusGeometry(rad, 0.06, 10, 64),
+            new THREE.MeshBasicMaterial({ color: 0x10ff68 })
+          );
+          sigilRing.rotation.x = Math.PI / 2;
+          sigilRing.position.set(0, 0.06, 0);
+          locationPropsGroup.add(sigilRing);
+        }
+
+        // 6 Giant Rib-Like Necropolis Vault Arches spanning overhead
+        for (let z = -10; z <= 10; z += 4) {
+          const ribArch = new THREE.Mesh(new THREE.TorusGeometry(8.8, 0.32, 8, 32, Math.PI), necroMat);
+          ribArch.position.set(0, 0.1, z);
+          locationPropsGroup.add(ribArch);
+        }
+
+        // 10 Floating Soul Obelisks around the Crypt
+        for (let i = 0; i < 10; i++) {
+          const ang = (i / 10) * Math.PI * 2 + 0.3;
+          const ox = Math.cos(ang) * 5.2;
+          const oz = Math.sin(ang) * 5.8;
+          const obGrp = new THREE.Group();
+          obGrp.position.set(ox, 1.85, oz);
+          const obShaft = new THREE.Mesh(new THREE.BoxGeometry(0.55, 2.85, 0.55), necroMat);
+          const obTip = new THREE.Mesh(
+            new THREE.OctahedronGeometry(0.42, 0),
+            new THREE.MeshBasicMaterial({ color: 0x34ff88 })
+          );
+          obTip.position.y = 1.75;
+          obGrp.add(obShaft, obTip);
+          locationPropsGroup.add(obGrp);
+          locationAnimatedObjects.push((t) => {
+            obGrp.position.y = 1.85 + Math.sin(t * 2.2 + i) * 0.28;
+            obTip.rotation.y = t * 2.5;
+          });
+        }
+      } else if (loc.id === 'astral_observatory') {
+        // 🌌 LOCATION #6: Astral Observatory — Open Cosmic Platform Floating in Deep Space Nebula, 4 Giant Rotating Armillary Sphere Rings & Orbiting Planets
+        const cosmicFloorMat = new THREE.MeshStandardMaterial({
+          color: 0x0b0620,
+          roughness: 0.15,
+          metalness: 0.65,
+          emissive: 0x2e1065,
+          emissiveIntensity: 0.55
+        });
+        const cosmicPlatform = new THREE.Mesh(new THREE.CylinderGeometry(8.5, 6.2, 0.5, 48), cosmicFloorMat);
+        cosmicPlatform.position.set(0, -0.22, 0);
+        locationPropsGroup.add(cosmicPlatform);
+
+        const astralGoldMat = new THREE.MeshStandardMaterial({
+          color: 0xfacc15,
+          roughness: 0.16,
+          metalness: 0.94,
+          emissive: 0x7e22ce,
+          emissiveIntensity: 0.58
+        });
+
+        // 4 Colossal Rotating Golden Armillary Sphere Rings enclosing the entire platform
+        const ringRadii = [4.2, 5.8, 7.6, 9.8];
+        for (let i = 0; i < ringRadii.length; i++) {
+          const armRing = new THREE.Mesh(
+            new THREE.TorusGeometry(ringRadii[i], 0.085, 16, 96),
+            astralGoldMat
+          );
+          armRing.position.set(0, 1.65, 0);
+          locationPropsGroup.add(armRing);
+          locationAnimatedObjects.push((t) => {
+            armRing.rotation.x = t * (0.22 + i * 0.08) * (i % 2 === 0 ? 1 : -1);
+            armRing.rotation.y = t * (0.30 - i * 0.05);
+          });
+        }
+
+        // Orbiting Celestial Planets & Moons in the surrounding space
+        const planetColors = [0xc084fc, 0x38bdf8, 0xf472b6, 0xfacc15];
+        for (let i = 0; i < 4; i++) {
+          const planet = new THREE.Mesh(
+            new THREE.SphereGeometry(0.65 + i * 0.18, 24, 24),
+            new THREE.MeshStandardMaterial({
+              color: planetColors[i],
+              roughness: 0.3,
+              emissive: planetColors[i],
+              emissiveIntensity: 0.45
+            })
+          );
+          locationPropsGroup.add(planet);
+          const orbitR = 7.5 + i * 2.2;
+          locationAnimatedObjects.push((t) => {
+            const ang = t * (0.25 - i * 0.04) + i * 1.5;
+            planet.position.set(Math.cos(ang) * orbitR, 3.2 + Math.sin(t + i) * 0.8, Math.sin(ang) * orbitR);
+          });
+        }
+      } else if (loc.id === 'emerald_temple') {
+        // 🌿 LOCATION #7: Emerald Temple of the Ancients — Stepped Mayan/Ancient Golden Pyramid Sanctuary & Giant Bioluminescent Emerald Monoliths
+        const templeFloor = new THREE.Mesh(
+          new THREE.PlaneGeometry(40, 48),
+          new THREE.MeshStandardMaterial({ color: 0x061f18, roughness: 0.5, metalness: 0.2 })
+        );
+        templeFloor.rotation.x = -Math.PI / 2;
+        templeFloor.position.set(0, 0.02, 0);
+        locationPropsGroup.add(templeFloor);
+
+        const emMat = new THREE.MeshStandardMaterial({
+          color: 0x10b981,
+          roughness: 0.12,
+          metalness: 0.25,
+          emissive: 0x059669,
+          emissiveIntensity: 1.15
+        });
+        const ancientGoldMat = new THREE.MeshStandardMaterial({
+          color: 0xfbbf24,
+          roughness: 0.28,
+          metalness: 0.85
+        });
+
+        // 12 Giant Bioluminescent Emerald Crystal Clusters & Golden Obelisk Totems
+        for (let i = 0; i < 12; i++) {
+          const ang = (i / 12) * Math.PI * 2;
+          const ex = Math.cos(ang) * 5.8;
+          const ez = Math.sin(ang) * 5.8;
+          const cryst = new THREE.Mesh(new THREE.OctahedronGeometry(0.65, 0), emMat);
+          cryst.scale.set(0.75, 2.8, 0.75);
+          cryst.position.set(ex, 1.45, ez);
+          locationPropsGroup.add(cryst);
+
+          const totem = new THREE.Mesh(new THREE.BoxGeometry(0.95, 5.5, 0.95), ancientGoldMat);
+          totem.position.set(Math.cos(ang) * 9.5, 2.75, Math.sin(ang) * 9.5);
+          totem.lookAt(0, 2.75, 0);
+          locationPropsGroup.add(totem);
+
+          locationAnimatedObjects.push((t) => {
+            cryst.rotation.y = t * 0.8 + i;
+            cryst.position.y = 1.45 + Math.sin(t * 2.0 + i) * 0.18;
+          });
+        }
+      } else if (loc.id === 'blood_arena') {
+        // 🩸 LOCATION #8: Blood Arena of Valhalla — Open-Air Colosseum Amphitheater under a Colossal Blood Moon & 12 Titan Greatswords
+        const arenaSand = new THREE.Mesh(
+          new THREE.PlaneGeometry(40, 48),
+          new THREE.MeshStandardMaterial({ color: 0x1f060a, roughness: 0.72, metalness: 0.15 })
+        );
+        arenaSand.rotation.x = -Math.PI / 2;
+        arenaSand.position.set(0, 0.02, 0);
+        locationPropsGroup.add(arenaSand);
+
+        // Colosseum Circular Tiered Amphitheater Wall
+        const colosseumWall = new THREE.Mesh(
+          new THREE.CylinderGeometry(13.5, 11.2, 6.5, 32, 3, true),
+          new THREE.MeshStandardMaterial({
+            color: 0x2a0810,
+            roughness: 0.65,
+            metalness: 0.25,
+            side: THREE.DoubleSide
+          })
+        );
+        colosseumWall.position.set(0, 3.25, 0);
+        locationPropsGroup.add(colosseumWall);
+
+        // Giant Crimson Blood Moon hanging in the night sky
+        const bloodMoon = new THREE.Mesh(
+          new THREE.SphereGeometry(3.4, 32, 32),
+          new THREE.MeshBasicMaterial({ color: 0xe11d48 })
+        );
+        bloodMoon.position.set(0, 7.2, -13.5);
+        locationPropsGroup.add(bloodMoon);
+
+        const bladeMat = new THREE.MeshStandardMaterial({
+          color: 0x27272a,
+          roughness: 0.22,
+          metalness: 0.90,
+          emissive: 0xbe123c,
+          emissiveIntensity: 0.72
+        });
+        for (let i = 0; i < 12; i++) {
+          const ang = (i / 12) * Math.PI * 2 + 0.25;
+          const bx = Math.cos(ang) * 5.2;
+          const bz = Math.sin(ang) * 5.2;
+          const swordGrp = new THREE.Group();
+          swordGrp.position.set(bx, 0, bz);
+          const blade = new THREE.Mesh(new THREE.BoxGeometry(0.32, 4.2, 0.08), bladeMat);
+          blade.position.y = 2.0;
+          const guard = new THREE.Mesh(new THREE.BoxGeometry(1.25, 0.18, 0.24), goldTrimMat);
+          guard.position.y = 3.45;
+          swordGrp.add(blade, guard);
+          swordGrp.rotation.z = (bx > 0 ? 1 : -1) * 0.16;
+          locationPropsGroup.add(swordGrp);
+        }
+      } else if (loc.id === 'golden_palace') {
+        // 👑 LOCATION #9: Imperial Golden Palace — White Marble & Pure Gold Colonnade Hall with Floating Solar Halos
+        const marbleFloor = new THREE.Mesh(
+          new THREE.PlaneGeometry(40, 48),
+          new THREE.MeshStandardMaterial({ color: 0xfef3c7, roughness: 0.14, metalness: 0.35 })
+        );
+        marbleFloor.rotation.x = -Math.PI / 2;
+        marbleFloor.position.set(0, 0.02, 0);
+        locationPropsGroup.add(marbleFloor);
+
+        const whiteMarbleMat = new THREE.MeshStandardMaterial({
+          color: 0xfffbeb,
+          roughness: 0.18,
+          metalness: 0.22
+        });
+        const pureGoldMat = new THREE.MeshStandardMaterial({
+          color: 0xfacc15,
+          roughness: 0.15,
+          metalness: 0.92,
+          emissive: 0xd97706,
+          emissiveIntensity: 0.35
+        });
+
+        // 12 Imperial White-Marble & Gold Triumphal Columns around the Circular Colonnade
+        for (let i = 0; i < 12; i++) {
+          const ang = (i / 12) * Math.PI * 2;
+          const px = Math.cos(ang) * 7.8;
+          const pz = Math.sin(ang) * 7.8;
+          const colShaft = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.48, 7.5, 24), whiteMarbleMat);
+          colShaft.position.set(px, 3.75, pz);
+          const colBase = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.68, 0.45, 24), pureGoldMat);
+          colBase.position.set(px, 0.22, pz);
+          const colCap = new THREE.Mesh(new THREE.CylinderGeometry(0.68, 0.52, 0.55, 24), pureGoldMat);
+          colCap.position.set(px, 7.5, pz);
+          locationPropsGroup.add(colShaft, colBase, colCap);
+        }
+
+        // Golden Rotunda Ring Beam & Floating Solar Halos
+        const rotundaBeam = new THREE.Mesh(new THREE.TorusGeometry(7.8, 0.38, 16, 64), pureGoldMat);
+        rotundaBeam.rotation.x = Math.PI / 2;
+        rotundaBeam.position.set(0, 7.8, 0);
+        locationPropsGroup.add(rotundaBeam);
+
+        const haloMat = new THREE.MeshBasicMaterial({ color: 0xfde047 });
+        for (let i = 0; i < 4; i++) {
+          const sunHalo = new THREE.Mesh(new THREE.TorusGeometry(2.8 + i * 0.85, 0.055, 12, 64), haloMat);
+          sunHalo.rotation.x = Math.PI / 2;
+          sunHalo.position.set(0, 4.2 + i * 0.65, 0);
+          locationPropsGroup.add(sunHalo);
+          locationAnimatedObjects.push((t) => {
+            sunHalo.position.y = 4.2 + i * 0.65 + Math.sin(t * 2.0 + i) * 0.16;
+          });
+        }
+      } else if (loc.id === 'shadow_abyss') {
+        // 🔮 LOCATION #10: Throne of the Shadow Abyss — Floating Obsidian Island in the Purple Void with Giant Dimensional Portals & Levitating Monoliths
+        const voidIsland = new THREE.Mesh(
+          new THREE.ConeGeometry(7.8, 3.2, 8),
+          new THREE.MeshStandardMaterial({
+            color: 0x090314,
+            roughness: 0.25,
+            metalness: 0.65,
+            emissive: 0x4a044e,
+            emissiveIntensity: 0.55
+          })
+        );
+        voidIsland.rotation.x = Math.PI;
+        voidIsland.position.set(0, -1.58, 0);
+        locationPropsGroup.add(voidIsland);
+
+        const voidMat = new THREE.MeshStandardMaterial({
+          color: 0x0f051d,
+          roughness: 0.18,
+          metalness: 0.70,
+          emissive: 0xa21caf,
+          emissiveIntensity: 0.92
+        });
+
+        for (const pz of [-9.5, 9.5]) {
+          const portalRing = new THREE.Mesh(
+            new THREE.TorusGeometry(3.4, 0.18, 16, 64),
+            new THREE.MeshBasicMaterial({ color: 0xe879f9 })
+          );
+          portalRing.position.set(0, 3.6, pz);
+          const portalCore = new THREE.Mesh(
+            new THREE.CircleGeometry(3.25, 48),
+            new THREE.MeshBasicMaterial({
+              color: 0x701a75,
+              side: THREE.DoubleSide,
+              transparent: true,
+              opacity: 0.45
+            })
+          );
+          portalCore.position.set(0, 3.6, pz);
+          locationPropsGroup.add(portalRing, portalCore);
+          locationAnimatedObjects.push((t) => {
+            portalRing.rotation.z = t * 1.4;
+          });
+        }
+
+        for (let i = 0; i < 12; i++) {
+          const ang = (i / 12) * Math.PI * 2 + 0.3;
+          const vx = Math.cos(ang) * 5.8;
+          const vz = Math.sin(ang) * 5.8;
+          const mono = new THREE.Mesh(new THREE.OctahedronGeometry(0.65, 0), voidMat);
+          mono.scale.set(0.75, 2.8, 0.75);
+          mono.position.set(vx, 2.1, vz);
+          locationPropsGroup.add(mono);
+          locationAnimatedObjects.push((t) => {
+            mono.position.y = 2.1 + Math.sin(t * 2.4 + i) * 0.32;
+            mono.rotation.y = -t * 1.1;
+          });
+        }
+      }
+    }
+
+    function updateLocationsDrawerUI() {
+      const loc = SANCTUM_LOCATIONS[currentLocationIdx] || SANCTUM_LOCATIONS[0];
+      const topBtn = document.getElementById('top-location-btn-label');
+      if (topBtn) {
+        topBtn.textContent = `${loc.icon} Локация: ${loc.shortName}`;
+      }
+      const badgeEl = document.getElementById('drawer-active-location-badge');
+      if (badgeEl) {
+        badgeEl.textContent = `${loc.icon} ${loc.ruName}`;
+      }
+      const hintEl = document.getElementById('location-desc-hint');
+      if (hintEl) {
+        hintEl.textContent = `${loc.icon} ${loc.ruName} — ${loc.desc}`;
+      }
+      for (let i = 0; i < SANCTUM_LOCATIONS.length; i++) {
+        const cardBtn = document.getElementById(`btn-location-${SANCTUM_LOCATIONS[i].id}`);
+        if (cardBtn) {
+          cardBtn.classList.toggle('active', i === currentLocationIdx);
+        }
+      }
+    }
+
+    function setSanctumLocation(idOrIdx, options = {}) {
+      let targetIdx = 0;
+      if (typeof idOrIdx === 'string') {
+        const found = SANCTUM_LOCATIONS.findIndex((l) => l.id === idOrIdx);
+        if (found >= 0) targetIdx = found;
+      } else if (typeof idOrIdx === 'number') {
+        targetIdx = ((idOrIdx % SANCTUM_LOCATIONS.length) + SANCTUM_LOCATIONS.length) % SANCTUM_LOCATIONS.length;
+      }
+      currentLocationIdx = targetIdx;
+      const loc = SANCTUM_LOCATIONS[currentLocationIdx];
+
+      // 1. Scene background & atmospheric fog
+      scene.background = new THREE.Color(loc.bgHex);
+      scene.fog = new THREE.FogExp2(loc.fogHex, loc.fogDensity);
+
+      // 2. Hemisphere, Key, Rim, Window & Brazier Lights
+      hemiLight.color.setHex(loc.hemiSky);
+      hemiLight.groundColor.setHex(loc.hemiGround);
+      hemiLight.intensity = loc.hemiInt;
+
+      keyLight.color.setHex(loc.keyHex);
+      keyLight.intensity = loc.keyInt;
+
+      rimLight.color.setHex(loc.rimHex);
+      rimLight.intensity = loc.rimInt;
+
+      for (const bLight of brazierLights) {
+        bLight.color.setHex(loc.brazierHex);
+        bLight.userData.baseIntensity = loc.brazierInt;
+        bLight.intensity = loc.brazierInt;
+      }
+      for (const sp of brazierGlowSprites) {
+        sp.material.color.setHex(loc.brazierHex);
+      }
+      for (const wLight of sideWinLights) {
+        wLight.color.setHex(loc.winSideHex);
+      }
+      northWinLight.color.setHex(loc.winNorthHex);
+      southWinLight.color.setHex(loc.winSouthHex);
+
+      // 3. Brazier Volumetric GLSL Flame Colors
+      if (brazierFlameCoreMat && brazierFlameCoreMat.uniforms) {
+        brazierFlameCoreMat.uniforms.uBaseColor.value.setRGB(...loc.flameCore);
+        brazierFlameCoreMat.uniforms.uMidColor.value.setRGB(...loc.flameMid);
+        brazierFlameCoreMat.uniforms.uTipColor.value.setRGB(...loc.flameTip);
+      }
+      if (brazierFlameMidMat && brazierFlameMidMat.uniforms) {
+        brazierFlameMidMat.uniforms.uBaseColor.value.setRGB(...loc.flameMid);
+        brazierFlameMidMat.uniforms.uMidColor.value.setRGB(...loc.flameTip);
+        brazierFlameMidMat.uniforms.uTipColor.value.setRGB(...loc.flameTip);
+      }
+      if (brazierFlameOuterMat && brazierFlameOuterMat.uniforms) {
+        brazierFlameOuterMat.uniforms.uBaseColor.value.setRGB(...loc.flameMid);
+        brazierFlameOuterMat.uniforms.uMidColor.value.setRGB(...loc.flameTip);
+        brazierFlameOuterMat.uniforms.uTipColor.value.setRGB(...loc.flameTip);
+      }
+
+      // 4. Re-tint Cathedral Walls, Columns, Floor & Stained Glass Windows
+      for (const mat of cathedralWallMats) {
+        if (mat.color) mat.color.setRGB(...loc.wallTint);
+        mat.needsUpdate = true;
+      }
+      for (const mat of cathedralColumnMats) {
+        if (mat.color) mat.color.setRGB(...loc.wallTint);
+        mat.needsUpdate = true;
+      }
+      for (const mat of cathedralFloorMats) {
+        if (mat.color) mat.color.setRGB(...loc.floorTint);
+        mat.roughness = loc.floorRough;
+        mat.metalness = loc.floorMetal;
+        mat.needsUpdate = true;
+      }
+      for (const mat of cathedralAmberGlassMats) {
+        mat.emissive.setHex(loc.winSouthHex);
+        mat.needsUpdate = true;
+      }
+      for (const mat of cathedralBlueGlassMats) {
+        mat.emissive.setHex(loc.winNorthHex);
+        mat.needsUpdate = true;
+      }
+
+      // 5. Chessboard Tiles & Border Frame Theme
+      boardLightSqMat.color.setHex(loc.lightSqHex);
+      boardDarkSqMat.color.setHex(loc.darkSqHex);
+      goldTrimMat.color.setHex(loc.trimHex);
+
+      // 6. Build 3D Location Architecture, Lava Lakes, Geysers & Particles
+      buildLocationEnvironment3D(loc);
+      updateLocationsDrawerUI();
+
+      // Sync location with online opponent if in a multiplayer room
+      if (gameMode === 'multi' && roomCode && !options.fromRemote) {
+        sendOnlineEvent({ type: 'location_change', locationId: loc.id });
+      }
+
+      if (!options.silent) {
+        playSanctumSound(loc.isLava ? 'demon_move' : 'ability');
+        impactFlashLight.color.setHex(loc.brazierHex);
+        impactFlashLight.position.set(0, BOARD_SURFACE_Y + 0.85, 0);
+        impactFlashLight.intensity = 7.5;
+        showNotificationToast(
+          `${loc.icon} Выбрана локация: «${loc.ruName}»${loc.isLava ? ' (🔥 Огненная арена с бурлящей лавой!)' : ''}`
+        );
+      }
+      renderer.shadowMap.needsUpdate = true;
+      return loc;
+    }
+
+    function cycleSanctumLocation() {
+      return setSanctumLocation(currentLocationIdx + 1);
+    }
+
+    document.getElementById('btn-ability-cast')?.addEventListener('click', () => {
+      castSelectedPieceAbility();
+    });
+    document.getElementById('btn-undo-move')?.addEventListener('click', () => {
+      handleUndoLastTurn();
+    });
+    document.getElementById('btn-hint-move')?.addEventListener('click', () => {
+      handleShowMoveHint();
+    });
+    document.getElementById('btn-ai-persona')?.addEventListener('click', () => {
+      currentAiPersonaIdx = (currentAiPersonaIdx + 1) % AI_PERSONAS.length;
+      updateAiPersonaButtonUI();
+      showNotificationToast(`Выбран характер соперника: ${AI_PERSONAS[currentAiPersonaIdx].ruLabel}`);
+    });
+    document.getElementById('btn-sound-toggle')?.addEventListener('click', () => {
+      soundEnabled = !soundEnabled;
+      const btn = document.getElementById('btn-sound-toggle');
+      if (btn) {
+        btn.textContent = soundEnabled ? '🔊 Звук: Вкл' : '🔇 Звук: Выкл';
+      }
+      if (soundEnabled) playSanctumSound('ability');
+    });
+
+    for (let i = 0; i < CAMPAIGN_BOSSES.length; i++) {
+      document.getElementById(`btn-boss-${i}`)?.addEventListener('click', () => {
+        startCampaignBoss(i);
+      });
+    }
+
+    for (let c = 0; c < 8; c++) {
+      document.getElementById(`btn-army-slot-${c}`)?.addEventListener('click', () => {
+        assignPieceToBackRowSlot(c);
+      });
+    }
+
+    for (const loc of SANCTUM_LOCATIONS) {
+      document.getElementById(`btn-location-${loc.id}`)?.addEventListener('click', () => {
+        setSanctumLocation(loc.id);
+      });
+    }
+    document.getElementById('btn-location-panorama')?.addEventListener('click', () => {
+      setCameraPreset('wide');
+    });
+
+    // =========================================================================
     // Lobby & Director Script Modal Interactions
     // =========================================================================
-    const lobbyModal = document.getElementById('lobby-modal');
+    const lobbyModal = document.getElementById('online-match-modal') || document.getElementById('lobby-modal');
     let selectedSpColor = 'w';
     let selectedMpColor = 'w';
 
@@ -5380,16 +7580,20 @@ export function initWizardChess() {
       const isSingle = tab === 'single';
       const isMulti = tab === 'multi';
       const isScript = tab === 'script';
-      document.getElementById('tab-single').classList.toggle('active', isSingle);
-      document.getElementById('tab-multi').classList.toggle('active', isMulti);
-      document.getElementById('tab-script').classList.toggle('active', isScript);
-      document.getElementById('panel-single').style.display = isSingle ? 'block' : 'none';
-      document.getElementById('panel-multi').style.display = isMulti ? 'block' : 'none';
-      document.getElementById('panel-script').style.display = isScript ? 'block' : 'none';
+      document.getElementById('tab-single')?.classList.toggle('active', isSingle);
+      document.getElementById('tab-multi')?.classList.toggle('active', isMulti);
+      document.getElementById('tab-script')?.classList.toggle('active', isScript);
+      const pSingle = document.getElementById('panel-single');
+      const pMulti = document.getElementById('panel-multi');
+      const pScript = document.getElementById('panel-script');
+      if (pSingle) pSingle.style.display = isSingle ? 'block' : 'none';
+      if (pMulti) pMulti.style.display = isMulti ? 'block' : 'none';
+      if (pScript) pScript.style.display = isScript ? 'block' : 'none';
     }
 
     document.getElementById('btn-lobby')?.addEventListener('click', () => openLobbyModal());
     document.getElementById('btn-close-lobby')?.addEventListener('click', closeLobbyModal);
+    document.getElementById('btn-close-online-modal')?.addEventListener('click', closeLobbyModal);
     document.getElementById('tab-single')?.addEventListener('click', () => switchLobbyTab('single'));
     document.getElementById('tab-multi')?.addEventListener('click', () => switchLobbyTab('multi'));
     document.getElementById('tab-script')?.addEventListener('click', () => switchLobbyTab('script'));
@@ -5454,6 +7658,18 @@ export function initWizardChess() {
       createMultiplayerRoom(selectedMpColor);
     });
 
+    document.getElementById('btn-quick-match')?.addEventListener('click', () => {
+      startQuickOnlineMatch();
+    });
+
+    document.getElementById('btn-online-quick')?.addEventListener('click', () => {
+      openLobbyModal('multi');
+    });
+
+    document.getElementById('online-status-pill')?.addEventListener('click', () => {
+      openLobbyModal('multi');
+    });
+
     document.getElementById('btn-enter-created-room')?.addEventListener('click', () => {
       closeLobbyModal();
     });
@@ -5461,14 +7677,16 @@ export function initWizardChess() {
     document.getElementById('btn-copy-code')?.addEventListener('click', () => {
       if (!roomCode) return;
       navigator.clipboard?.writeText(roomCode);
-      document.getElementById('mp-status-msg').textContent = `Copied room code ${roomCode}!`;
+      document.getElementById('mp-status-msg').textContent = `Код комнаты ${roomCode} скопирован в буфер обмена!`;
+      showNotificationToast(`📋 Код комнаты ${roomCode} скопирован!`);
     });
 
     document.getElementById('btn-copy-link')?.addEventListener('click', () => {
       if (!roomCode) return;
       const inviteUrl = `${window.location.origin}${window.location.pathname}?room=${roomCode}`;
       navigator.clipboard?.writeText(inviteUrl);
-      document.getElementById('mp-status-msg').textContent = 'Copied invite link to clipboard!';
+      document.getElementById('mp-status-msg').textContent = 'Ссылка-приглашение скопирована в буфер обмена!';
+      showNotificationToast('🔗 Ссылка на онлайн-партию скопирована!');
     });
 
     document.getElementById('room-pill')?.addEventListener('click', () => {
@@ -5529,6 +7747,12 @@ export function initWizardChess() {
       resetChessBoard,
       setArmyFormation,
       cycleArmyFormation,
+      setSanctumLocation,
+      cycleSanctumLocation,
+      SANCTUM_LOCATIONS,
+      createMultiplayerRoom,
+      joinMultiplayerRoom,
+      startQuickOnlineMatch,
       transmutePieceAt,
       handleSelectOrTransmuteNewPiece,
       ARMY_FORMATIONS,
@@ -6029,9 +8253,27 @@ export function initWizardChess() {
         }
       }
 
-      // Advance volumetric GLSL brazier flames & active warm firelight flicker
+      // Advance volumetric GLSL brazier flames, molten lava shaders & active warm firelight flicker
       for (let i = 0; i < brazierFireUniforms.length; i++) {
         brazierFireUniforms[i].uTime.value = elapsedTotal;
+      }
+      for (let i = 0; i < lavaShaderUniforms.length; i++) {
+        lavaShaderUniforms[i].uTime.value = elapsedTotal;
+      }
+      for (let i = 0; i < locationAnimatedObjects.length; i++) {
+        locationAnimatedObjects[i](elapsedTotal, dt);
+      }
+      if (locationParticleSystem && locationParticleSystem.points) {
+        const posAttr = locationParticleSystem.points.geometry.attributes.position;
+        const vy = locationParticleSystem.speedY;
+        for (let i = 0; i < locationParticleSystem.count; i++) {
+          let py = posAttr.getY(i) + vy * dt;
+          if (vy > 0 && py > 8.2) py = 0.15;
+          else if (vy < 0 && py < 0.15) py = 8.2;
+          const px = posAttr.getX(i) + Math.sin(elapsedTotal * 1.8 + locationParticleSystem.phases[i]) * 0.008;
+          posAttr.setXY(i, px, py);
+        }
+        posAttr.needsUpdate = true;
       }
       for (let i = 0; i < brazierGlowSprites.length; i++) {
         const sp = brazierGlowSprites[i];
@@ -6080,7 +8322,7 @@ export function initWizardChess() {
     });
 
 
-    // Startup sequence (Standalone Single-Player AI Studio Applet)
+    // Startup sequence (Single-Player & Online Multiplayer Room Auto-Join)
     (async () => {
       await loadAllAssets();
       const params = new URLSearchParams(window.location.search);
@@ -6088,7 +8330,18 @@ export function initWizardChess() {
       if (urlSide === 'b' || urlSide === 'black') {
         playerColor = 'b';
       }
-      resetChessBoard(true, false);
+      const urlLoc = params.get('location');
+      if (urlLoc) {
+        setSanctumLocation(urlLoc, { silent: true });
+      } else {
+        setSanctumLocation(0, { silent: true });
+      }
+      const urlRoom = params.get('room');
+      if (urlRoom && urlRoom.trim().length > 0) {
+        await joinMultiplayerRoom(urlRoom.trim());
+      } else {
+        resetChessBoard(true, false);
+      }
       updateNewPiecesDockUI();
       if (navigator.webdriver) {
         window.wizardChess.stepBy(0.9, 15);

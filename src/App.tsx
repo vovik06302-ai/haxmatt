@@ -1,82 +1,128 @@
 import { useEffect, useRef, useState } from 'react';
 import { initWizardChess } from './wizardChessEngine.js';
 
-const GITHUB_WORKFLOW_YAML = `name: Build Windows .EXE Installer
+const INITIAL_VERSION = 'v1.2.0';
+const LATEST_VERSION = 'v1.3.0';
 
-on:
-  push:
-    branches: [ main, master ]
-    tags: [ 'v*' ]
-  workflow_dispatch:
+const BOSS_TRIALS = [
+  {
+    idx: 0,
+    title: '1. Страж Паперти',
+    desc: 'Классический гарнизон собора (ИИ: Хранитель)',
+    badge: 'Разминка'
+  },
+  {
+    idx: 1,
+    title: '2. Ковен Архимага',
+    desc: 'Маги телепортации и Архиепископы Света',
+    badge: 'Средний'
+  },
+  {
+    idx: 2,
+    title: '3. Всадники Апокалипсиса',
+    desc: 'Штурмовая кавалерия Всадников Демонов на двух линиях',
+    badge: 'Сложный'
+  },
+  {
+    idx: 3,
+    title: '4. Гнездо Древних Драконов',
+    desc: 'Крылатые Драконы и тяжёлые Канцлеры',
+    badge: 'Эксперт'
+  },
+  {
+    idx: 4,
+    title: '5. Владыка Бездны (Финал)',
+    desc: 'Элитный легион Всадников Демонов, Драконов и Магов',
+    badge: 'Босс'
+  }
+];
 
-permissions:
-  contents: write
+const LAVA_LOCATIONS = [
+  {
+    id: 'lava_citadel',
+    num: 2,
+    icon: '🌋',
+    name: 'Огненная Цитадель Лавы',
+    badge: '🔥 ЛАВА',
+    shortDesc: 'Кипящее озеро магмы, 4 лавовых гейзера, базальтовые скалы и восходящие угли'
+  },
+  {
+    id: 'lava_forge',
+    num: 3,
+    icon: '🔥',
+    name: 'Вулкан Кузницы Демонов',
+    badge: '🔥 ЛАВА',
+    shortDesc: 'Жерло вулкана, реки жидкого золота и лавы, гигантские цепи Бездны и горны'
+  }
+];
 
-jobs:
-  build-windows-exe:
-    runs-on: windows-latest
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Prepare package.json for Windows Public NPM & Electron
-        shell: bash
-        run: |
-          node -e '
-            const fs = require("fs");
-            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
-            pkg.description = pkg.description || "Wizard Chess 3D — Gothic Cathedral & Demon Riders";
-            pkg.author = pkg.author || "Wizard Chess 3D";
-            pkg.main = "electron/main.cjs";
-            delete pkg.scripts.predev;
-            delete pkg.scripts.prebuild;
-            delete pkg.scripts.prelint;
-            if (pkg.dependencies) {
-              delete pkg.dependencies["@google/genai"];
-              pkg.dependencies["vite"] = "^6.2.0";
-              pkg.dependencies["@vitejs/plugin-react"] = "^4.3.4";
-              pkg.dependencies["react"] = "^19.0.0";
-              pkg.dependencies["react-dom"] = "^19.0.0";
-              pkg.dependencies["three"] = "^0.170.0";
-            }
-            if (pkg.devDependencies) {
-              pkg.devDependencies["typescript"] = "^5.8.2";
-              pkg.devDependencies["@types/react"] = "^19.0.10";
-              pkg.devDependencies["@types/react-dom"] = "^19.0.4";
-              pkg.devDependencies["electron"] = "^33.2.0";
-              pkg.devDependencies["electron-builder"] = "^25.1.8";
-            }
-            fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2));
-          '
-
-      - name: Install Dependencies & Electron Builder
-        run: npm install --legacy-peer-deps --no-audit --no-fund
-
-      - name: Build 3D Web Application Bundle
-        run: npx vite build
-
-      - name: Package Windows .EXE Installer (NSIS + Portable)
-        run: npx electron-builder --win --x64 --config electron-builder.yml --publish never
-
-      - name: Upload .EXE Installer to GitHub Actions Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: Wizard-Chess-3D-Windows-Installer
-          path: |
-            release/*.exe
-          if-no-files-found: error`;
+const OTHER_LOCATIONS = [
+  {
+    id: 'cathedral',
+    num: 1,
+    icon: '🏰',
+    name: 'Готический Собор',
+    badge: 'Классика'
+  },
+  {
+    id: 'ice_throne',
+    num: 4,
+    icon: '❄️',
+    name: 'Ледяной Трон Севера',
+    badge: 'Мерзлота'
+  },
+  {
+    id: 'necropolis',
+    num: 5,
+    icon: '💀',
+    name: 'Некрополь Короля Лича',
+    badge: 'Некромантия'
+  },
+  {
+    id: 'astral_observatory',
+    num: 6,
+    icon: '🌌',
+    name: 'Астральная Обсерватория',
+    badge: 'Космос'
+  },
+  {
+    id: 'emerald_temple',
+    num: 7,
+    icon: '🌿',
+    name: 'Изумрудный Храм Древних',
+    badge: 'Древние'
+  },
+  {
+    id: 'blood_arena',
+    num: 8,
+    icon: '🩸',
+    name: 'Кровавая Арена Вальхаллы',
+    badge: 'Битва'
+  },
+  {
+    id: 'golden_palace',
+    num: 9,
+    icon: '👑',
+    name: 'Золотой Чертог Императора',
+    badge: 'Империя'
+  },
+  {
+    id: 'shadow_abyss',
+    num: 10,
+    icon: '🔮',
+    name: 'Трон Бездны и Теней',
+    badge: 'Пустота'
+  }
+];
 
 export default function App() {
   const initializedRef = useRef(false);
   const [mobileSheetOpen, setMobileSheetOpen] = useState(false);
   const [piecesDrawerOpen, setPiecesDrawerOpen] = useState(false);
-  const [exeModalOpen, setExeModalOpen] = useState(false);
-  const [copiedCmd, setCopiedCmd] = useState('');
+  const [locationsDrawerOpen, setLocationsDrawerOpen] = useState(false);
+  const [bossModalOpen, setBossModalOpen] = useState(false);
+  const [appVersion, setAppVersion] = useState(INITIAL_VERSION);
+  const [updateAvailable, setUpdateAvailable] = useState(true);
 
   useEffect(() => {
     if (initializedRef.current) return;
@@ -89,7 +135,8 @@ export default function App() {
       if (e.key === 'Escape') {
         setMobileSheetOpen(false);
         setPiecesDrawerOpen(false);
-        setExeModalOpen(false);
+        setLocationsDrawerOpen(false);
+        setBossModalOpen(false);
       }
     };
     const handleResize = () => {
@@ -116,22 +163,26 @@ export default function App() {
     }
   };
 
-  const handleDownloadWorkflow = () => {
-    const blob = new Blob([GITHUB_WORKFLOW_YAML], { type: 'text/yaml;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'build-exe.yml';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+  const handleApplyUpdate = () => {
+    setAppVersion(LATEST_VERSION);
+    setUpdateAvailable(false);
+    setMobileSheetOpen(false);
   };
 
-  const handleCopyText = (text: string, label: string) => {
-    navigator.clipboard?.writeText(text);
-    setCopiedCmd(label);
-    setTimeout(() => setCopiedCmd(''), 2200);
+  const togglePiecesDrawer = () => {
+    setPiecesDrawerOpen((prev) => {
+      const next = !prev;
+      if (next) setLocationsDrawerOpen(false);
+      return next;
+    });
+  };
+
+  const toggleLocationsDrawer = () => {
+    setLocationsDrawerOpen((prev) => {
+      const next = !prev;
+      if (next) setPiecesDrawerOpen(false);
+      return next;
+    });
   };
 
   return (
@@ -141,13 +192,13 @@ export default function App() {
         <div className="loader-bar-wrap">
           <div className="loader-bar" id="loader-bar"></div>
         </div>
-        <div id="loader-text">Загрузка архитектуры собора и скульптурных фигур...</div>
+        <div id="loader-text">Загрузка 10 локаций и скульптурных фигур...</div>
       </div>
 
       <div id="canvas-container"></div>
 
       <div id="update-status-toast" className="update-toast" role="status" aria-live="polite">
-        ✔ Обновление выполнено (v1.2.0): обычные фигуры, Всадники Демонов и 3D-сцена синхронизированы!
+        ✔ Обновление установлено ({LATEST_VERSION}): 10 локаций (включая 2 огненные с лавой) и Всадники Демонов готовы!
       </div>
 
       <button
@@ -172,31 +223,85 @@ export default function App() {
           </div>
           <button
             type="button"
+            className="hud-btn online-top-btn"
+            id="btn-online-quick"
+            title="Играть с противником через интернет онлайн (Быстрый поиск соперника, создание комнаты по коду или ссылке)"
+          >
+            <span className="online-dot offline" id="online-status-dot"></span>
+            <span id="online-status-label">🌐 Играть онлайн</span>
+          </button>
+          <button
+            type="button"
             className={`hud-btn ${piecesDrawerOpen ? 'active' : ''}`}
             id="btn-pieces-drawer-top"
-            onClick={() => setPiecesDrawerOpen((prev) => !prev)}
+            onClick={togglePiecesDrawer}
             aria-expanded={piecesDrawerOpen}
             aria-controls="new-pieces-dock"
-            title="Открыть или скрыть выдвижное меню выбора фигур"
+            title="Открыть или скрыть выдвижное меню выбора фигур и конструктора строя"
           >
             ♟ Выбор фигур {piecesDrawerOpen ? '▴' : '▾'}
           </button>
           <button
             type="button"
-            className="hud-btn primary"
-            id="btn-update-top"
-            title="Обновить 3D-фигуры, шейдеры и состояние доски"
+            className={`hud-btn location-top-btn ${locationsDrawerOpen ? 'active' : ''}`}
+            id="btn-locations-drawer-top"
+            onClick={toggleLocationsDrawer}
+            aria-expanded={locationsDrawerOpen}
+            aria-controls="locations-slide-drawer"
+            title="Открыть выдвижное меню выбора помещения (10 захватывающих локаций, включая 2 огненные с лавой)"
           >
-            ↻ Обновить
+            <span id="top-location-btn-label">🏰 Локация: Готический Собор</span>
+            <span>{locationsDrawerOpen ? '▴' : '▾'}</span>
+          </button>
+          <button
+            type="button"
+            className={`hud-btn ${bossModalOpen ? 'active' : ''}`}
+            id="btn-campaign-bosses"
+            onClick={() => setBossModalOpen((prev) => !prev)}
+            title="Открыть режим кампании «Испытания и Боссы»"
+          >
+            ⚔ Боссы (5)
           </button>
           <button
             type="button"
             className="hud-btn"
-            id="btn-exe-top"
-            onClick={() => setExeModalOpen(true)}
-            title="Сборка установочного файла .EXE через GitHub Actions"
+            id="btn-ability-cast"
+            title="Применить активную способность выбранной фигуры (Огненный след Демона, Дыхание Дракона, Магический щит)"
           >
-            ⬇ Установщик .EXE (GitHub)
+            ⚡ Способность фигуры
+          </button>
+          <button
+            type="button"
+            className="hud-btn"
+            id="btn-undo-move"
+            title="Отменить последний ход"
+          >
+            ↶ Отменить ход
+          </button>
+          <button
+            type="button"
+            className="hud-btn"
+            id="btn-hint-move"
+            title="Подсказать лучший тактический ход"
+          >
+            💡 Подсказка
+          </button>
+          <button
+            type="button"
+            className={`hud-btn update-version-btn ${updateAvailable ? 'blue-flame-active' : ''}`}
+            id="btn-update-top"
+            onClick={handleApplyUpdate}
+            title={
+              updateAvailable
+                ? `Доступно обновление ${LATEST_VERSION}! Нажмите для обновления`
+                : `Установлена актуальная версия ${appVersion}`
+            }
+          >
+            {updateAvailable && <span className="blue-flame-icon" aria-hidden="true">🔥</span>}
+            <span>↻ Обновить</span>
+            <span className="version-badge" id="app-version-badge">
+              {updateAvailable ? `${appVersion} → ${LATEST_VERSION}` : appVersion}
+            </span>
           </button>
         </div>
 
@@ -251,7 +356,7 @@ export default function App() {
             </button>
           </div>
 
-          <div className="mobile-sheet-section-label">Партия и армии</div>
+          <div className="mobile-sheet-section-label">Партия, ИИ и армии</div>
 
           <button
             className="hud-btn active"
@@ -271,11 +376,18 @@ export default function App() {
           </button>
           <button
             className="hud-btn"
-            id="btn-update-app"
-            title="Обновить состояние фигур и сцены"
+            id="btn-ai-persona"
+            title="Переключить характер и стиль игры ИИ (Гроссмейстер / Агрессивный Демон / Хранитель Собора)"
             onClick={() => setMobileSheetOpen(false)}
           >
-            ↻ Обновить
+            ИИ: Гроссмейстер (Тактика)
+          </button>
+          <button
+            className="hud-btn"
+            id="btn-sound-toggle"
+            title="Включить или выключить объёмный звук и атмосферу локации"
+          >
+            🔊 Звук: Вкл
           </button>
           <button
             className="hud-btn"
@@ -332,9 +444,9 @@ export default function App() {
           <button
             className="hud-btn"
             id="btn-cam-wide"
-            title="Панорамный вид собора (нажмите ещё раз для смены Север / Юг)"
+            title="Панорамный вид помещения (нажмите ещё раз для смены Север / Юг)"
           >
-            Собор
+            Панорама зала
           </button>
 
           <div className="hud-divider" aria-hidden="true"></div>
@@ -355,30 +467,208 @@ export default function App() {
         </div>
       </div>
 
-      {/* Выдвижное меню выбора фигур (Slide-Out Drawer) */}
+      {/* Модальное окно Онлайн-игры через интернет и выбора режима (#online-match-modal) */}
+      <div id="online-match-modal" className="online-modal-backdrop" role="dialog" aria-modal="true" aria-label="Онлайн-игра через интернет">
+        <div className="online-modal-card">
+          <div className="online-modal-header">
+            <span className="online-modal-title">🌐 Играть онлайн через интернет</span>
+            <button type="button" className="pieces-drawer-close" id="btn-close-online-modal">
+              Закрыть ✕
+            </button>
+          </div>
+
+          <div className="lobby-tabs">
+            <button type="button" className="lobby-tab active" id="tab-multi">
+              🌐 Онлайн с противником
+            </button>
+            <button type="button" className="lobby-tab" id="tab-single">
+              🤖 Одиночная игра (ИИ)
+            </button>
+            <button type="button" className="lobby-tab" id="tab-script" style={{ display: 'none' }}>
+              Запись
+            </button>
+          </div>
+
+          {/* Панель Онлайн-мультиплеера */}
+          <div id="panel-multi" className="lobby-panel" style={{ display: 'block' }}>
+            <div className="online-quick-match-box">
+              <div className="online-box-title">⚡ Быстрый матч через интернет</div>
+              <div className="online-box-sub">
+                Автоматический поиск свободного соперника онлайн. Если комната уже ждёт игрока — вы мгновенно подключитесь к ней!
+              </div>
+              <button type="button" className="online-primary-btn" id="btn-quick-match">
+                🔍 Найти соперника онлайн
+              </button>
+            </div>
+
+            <div className="online-split-grid">
+              <div className="online-card">
+                <div className="online-box-title">➕ Создать приватную комнату</div>
+                <div className="online-box-sub">Выберите ваш цвет фигур и отправьте 4-значный код или ссылку другу:</div>
+                <div className="color-pick-row">
+                  <button type="button" className="color-pick-btn selected" id="pick-mp-white">
+                    ♔ За Белых
+                  </button>
+                  <button type="button" className="color-pick-btn" id="pick-mp-black">
+                    ♚ За Чёрных
+                  </button>
+                </div>
+                <button type="button" className="online-action-btn" id="btn-create-room">
+                  Создать комнату
+                </button>
+              </div>
+
+              <div className="online-card">
+                <div className="online-box-title">🔑 Войти по коду комнаты</div>
+                <div className="online-box-sub">Введите 4-значный код комнаты, который вам прислал соперник:</div>
+                <div className="join-code-row">
+                  <input
+                    type="text"
+                    id="input-room-code"
+                    className="room-code-input"
+                    placeholder="КОД (напр. A7K9)"
+                    maxLength={6}
+                  />
+                  <button type="button" className="online-action-btn" id="btn-join-room">
+                    Войти
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div id="created-room-box" className="created-room-banner" style={{ display: 'none' }}>
+              <div className="created-room-top">
+                <span>Код вашей онлайн-комнаты:</span>
+                <strong id="created-room-code" className="created-room-code-badge">----</strong>
+              </div>
+              <div className="created-room-actions">
+                <button type="button" className="hud-btn" id="btn-copy-code">
+                  📋 Скопировать код
+                </button>
+                <button type="button" className="hud-btn" id="btn-copy-link">
+                  🔗 Скопировать ссылку другу
+                </button>
+                <button type="button" className="hud-btn active" id="btn-enter-created-room">
+                  ▶ Перейти к доске
+                </button>
+              </div>
+            </div>
+
+            <div id="mp-status-msg" className="online-status-message">
+              Выберите «Найти соперника онлайн», создайте комнату или введите код комнаты друга.
+            </div>
+          </div>
+
+          <div id="panel-single" className="lobby-panel" style={{ display: 'none' }}>
+            <div className="online-card">
+              <div className="online-box-title">🤖 Игра против компьютерного ИИ</div>
+              <div className="online-box-sub">Выберите сторону для одиночной партии:</div>
+              <div className="color-pick-row">
+                <button type="button" className="color-pick-btn selected" id="pick-sp-white">
+                  ♔ Играть за Белых
+                </button>
+                <button type="button" className="color-pick-btn" id="pick-sp-black">
+                  ♚ Играть за Чёрных
+                </button>
+              </div>
+              <button type="button" className="online-primary-btn" id="btn-start-single">
+                ⚔ Начать одиночную партию
+              </button>
+            </div>
+          </div>
+
+          <div id="panel-script" className="lobby-panel" style={{ display: 'none' }}></div>
+        </div>
+      </div>
+
+      {/* Модальное окно Боссов и Кампании «Испытания Святилища» */}
+      <div
+        className={`boss-modal-backdrop ${bossModalOpen ? 'open' : ''}`}
+        onClick={() => setBossModalOpen(false)}
+      >
+        <div className="boss-modal-card" onClick={(e) => e.stopPropagation()}>
+          <div className="boss-modal-header">
+            <div>
+              <div className="boss-modal-kicker">Кампания Святилища • 5 Уровней</div>
+              <h2 className="boss-modal-title">⚔ Испытания и Боссы</h2>
+            </div>
+            <button
+              type="button"
+              className="hud-btn"
+              onClick={() => setBossModalOpen(false)}
+            >
+              Закрыть ✕
+            </button>
+          </div>
+          <div className="boss-list-grid">
+            {BOSS_TRIALS.map((b) => (
+              <button
+                key={b.idx}
+                type="button"
+                id={`btn-boss-${b.idx}`}
+                className="boss-card-btn"
+                onClick={() => setBossModalOpen(false)}
+              >
+                <div className="boss-card-top">
+                  <span className="boss-card-title">{b.title}</span>
+                  <span className="boss-card-badge">{b.badge}</span>
+                </div>
+                <div className="boss-card-desc">{b.desc}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Нижняя панель выдвижных меню: Выбор фигур + Выбор помещения (10 локаций) */}
       <div
         id="new-pieces-dock"
-        className={`pieces-slide-drawer ${piecesDrawerOpen ? 'open' : ''}`}
-        aria-label="Выдвижное меню выбора и превращения фигур"
+        className={`pieces-slide-drawer ${piecesDrawerOpen || locationsDrawerOpen ? 'open' : ''}`}
+        aria-label="Выдвижное меню выбора фигур и локаций"
       >
-        <button
-          type="button"
-          className="pieces-drawer-handle"
-          id="btn-drawer-tab"
-          onClick={() => setPiecesDrawerOpen((prev) => !prev)}
-          aria-expanded={piecesDrawerOpen}
-          title={piecesDrawerOpen ? 'Свернуть меню выбора фигур' : 'Открыть выдвижное меню выбора фигур'}
-        >
-          <span className="pieces-drawer-handle-title">♟ Выбор фигур</span>
-          <span className="pieces-drawer-active-badge" id="drawer-active-piece-badge">
-            🔥🐎 Всадник Демона
-          </span>
-          <span className="pieces-drawer-chevron">{piecesDrawerOpen ? '▼ Свернуть' : '▲ Открыть'}</span>
-        </button>
+        <div className="drawer-handles-bar">
+          <button
+            type="button"
+            className={`pieces-drawer-handle ${piecesDrawerOpen ? 'active-tab' : ''}`}
+            id="btn-drawer-tab"
+            onClick={togglePiecesDrawer}
+            aria-expanded={piecesDrawerOpen}
+            title={piecesDrawerOpen ? 'Свернуть меню выбора фигур' : 'Открыть выдвижное меню выбора фигур'}
+          >
+            <span className="pieces-drawer-handle-title">♟ Выбор фигур</span>
+            <span className="pieces-drawer-active-badge" id="drawer-active-piece-badge">
+              🔥🐎 Всадник Демона
+            </span>
+            <span className="pieces-drawer-chevron">{piecesDrawerOpen ? '▼' : '▲'}</span>
+          </button>
 
-        <div className="pieces-drawer-body">
+          <button
+            type="button"
+            className={`pieces-drawer-handle location-drawer-handle ${locationsDrawerOpen ? 'active-tab' : ''}`}
+            id="btn-locations-drawer-tab"
+            onClick={toggleLocationsDrawer}
+            aria-expanded={locationsDrawerOpen}
+            title={
+              locationsDrawerOpen
+                ? 'Свернуть выдвижное меню локаций'
+                : 'Открыть выдвижное меню выбора помещения (10 локаций, 2 с лавой)'
+            }
+          >
+            <span className="pieces-drawer-handle-title">🌋 Помещения (10)</span>
+            <span className="pieces-drawer-active-badge lava-accent-badge" id="drawer-active-location-badge">
+              🏰 Готический Собор Святилища
+            </span>
+            <span className="pieces-drawer-chevron">{locationsDrawerOpen ? '▼' : '▲'}</span>
+          </button>
+        </div>
+
+        {/* Тело выдвижного меню #1: Выбор фигур и Конструктор строя */}
+        <div
+          className={`pieces-drawer-body ${piecesDrawerOpen ? 'drawer-panel-active' : ''}`}
+          id="pieces-slide-panel"
+        >
           <div className="pieces-drawer-header">
-            <span className="pieces-drawer-title">Выбор фигур (превращение пешки или выбранной фигуры)</span>
+            <span className="pieces-drawer-title">Выбор фигур и Конструктор собственной армии</span>
             <button
               type="button"
               className="pieces-drawer-close"
@@ -491,90 +781,118 @@ export default function App() {
             </div>
           </div>
 
+          <div className="pieces-drawer-section">
+            <span className="new-pieces-label">Конструктор строя (нажмите клетку a–h, чтобы поставить туда выбранную фигуру):</span>
+            <div className="new-pieces-row">
+              {['a', 'b', 'c', 'd', 'e (♔)', 'f', 'g', 'h'].map((lbl, idx) => (
+                <button
+                  key={idx}
+                  type="button"
+                  className="piece-chip slot-chip"
+                  id={`btn-army-slot-${idx}`}
+                  disabled={idx === 4}
+                  title={idx === 4 ? 'Клетка Короля' : `Поставить выбранную фигуру на вертикаль ${lbl}`}
+                >
+                  {lbl}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <div className="new-piece-rule-hint" id="new-piece-rule-hint">
             Всадник Демона (Кавалерия Бездны): прыгает буквой «Г» как Конь И совершает огненный прорыв на 1–3 клетки в любом из 8 направлений.
           </div>
         </div>
-      </div>
 
-      {exeModalOpen && (
-        <div className="exe-modal-backdrop" onClick={() => setExeModalOpen(false)}>
-          <div className="exe-modal-card" onClick={(e) => e.stopPropagation()}>
-            <div className="exe-modal-header">
-              <div>
-                <div className="exe-modal-badge">GitHub Actions + Electron Builder</div>
-                <h2 className="exe-modal-title">Установочный файл .EXE для Windows</h2>
-              </div>
+        {/* Тело выдвижного меню #2: Выбор помещения (10 захватывающих локаций, 2 огненные с лавой) */}
+        <div
+          className={`pieces-drawer-body locations-drawer-body ${locationsDrawerOpen ? 'drawer-panel-active' : ''}`}
+          id="locations-slide-drawer"
+        >
+          <div className="pieces-drawer-header">
+            <span className="pieces-drawer-title">
+              🌋 Выбор помещения и арены боя (10 локаций • 2 огненные с лавой)
+            </span>
+            <div className="drawer-header-actions">
               <button
                 type="button"
-                className="hud-btn"
-                onClick={() => setExeModalOpen(false)}
+                className="pieces-drawer-close panorama-btn"
+                id="btn-location-panorama"
+                title="Показать панорамный обзор выбранного помещения"
               >
-                Закрыть ✕
-              </button>
-            </div>
-
-            <p className="exe-modal-desc">
-              В проект уже встроены конфигурация <code>electron-builder.yml</code>, десктопное окно{' '}
-              <code>electron/main.cjs</code> и автоматический пайплайн{' '}
-              <code>.github/workflows/build-exe.yml</code>.
-            </p>
-
-            <div className="exe-steps-grid">
-              <div className="exe-step-box">
-                <div className="exe-step-num">Способ 1 — Автосборка через GitHub Actions (без установки средств на ПК)</div>
-                <ol className="exe-step-list">
-                  <li>Загрузите или синхронизируйте этот проект в свой репозиторий на <strong>GitHub</strong>.</li>
-                  <li>
-                    Перейдите во вкладку <strong>Actions → Build Windows .EXE Installer</strong> и нажмите{' '}
-                    <strong>Run workflow</strong> (или просто сделайте <code>git push</code>).
-                  </li>
-                  <li>
-                    Через ~2 минуты скачайте готовые файлы <code>Wizard-Chess-3D-Setup-1.2.0.exe</code> (установщик) и{' '}
-                    <code>Wizard-Chess-3D-Portable-1.2.0.exe</code> в разделе <strong>Artifacts</strong> или <strong>Releases</strong>.
-                  </li>
-                </ol>
-              </div>
-
-              <div className="exe-step-box">
-                <div className="exe-step-num">Способ 2 — Локальная сборка .EXE одной командой</div>
-                <div className="exe-code-line">
-                  <code>npm install --no-save electron electron-builder &amp;&amp; npm run dist:exe</code>
-                  <button
-                    type="button"
-                    className="hud-btn"
-                    onClick={() =>
-                      handleCopyText(
-                        'npm install --no-save electron electron-builder && npm run dist:exe',
-                        'local'
-                      )
-                    }
-                  >
-                    {copiedCmd === 'local' ? 'Скопировано ✔' : 'Копировать'}
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <div className="exe-modal-actions">
-              <button type="button" className="hud-btn primary" onClick={handleDownloadWorkflow}>
-                ⬇ Скачать .github/workflows/build-exe.yml
+                🎥 Обзор зала
               </button>
               <button
                 type="button"
-                className="hud-btn"
-                onClick={() => handleCopyText(GITHUB_WORKFLOW_YAML, 'yaml')}
+                className="pieces-drawer-close"
+                onClick={() => setLocationsDrawerOpen(false)}
+                title="Свернуть выдвижное меню локаций"
               >
-                {copiedCmd === 'yaml' ? 'YAML скопирован ✔' : 'Скопировать YAML пайплайна'}
+                Свернуть ✕
               </button>
             </div>
           </div>
+
+          <div className="pieces-drawer-section">
+            <span className="new-pieces-label lava-section-label">
+              🔥 Огненные локации с бурлящей лавой (захватывающая стихия огня):
+            </span>
+            <div className="lava-locations-grid">
+              {LAVA_LOCATIONS.map((loc) => (
+                <button
+                  key={loc.id}
+                  type="button"
+                  className="location-card-btn lava-location-card"
+                  id={`btn-location-${loc.id}`}
+                  title={loc.shortDesc}
+                >
+                  <div className="location-card-top">
+                    <span className="location-card-name">
+                      {loc.icon} {loc.num}. {loc.name}
+                    </span>
+                    <span className="location-lava-badge">{loc.badge}</span>
+                  </div>
+                  <div className="location-card-sub">{loc.shortDesc}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="pieces-drawer-section">
+            <span className="new-pieces-label">🏰 Залы, Храмы и Магические Измерения (8 локаций):</span>
+            <div className="locations-chips-grid">
+              {OTHER_LOCATIONS.map((loc) => (
+                <button
+                  key={loc.id}
+                  type="button"
+                  className={`piece-chip location-chip ${loc.id === 'cathedral' ? 'active' : ''}`}
+                  id={`btn-location-${loc.id}`}
+                  title={`${loc.num}. ${loc.name} (${loc.badge})`}
+                >
+                  <span className="piece-chip-icon">{loc.icon}</span>
+                  <span>
+                    {loc.num}. {loc.name}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="new-piece-rule-hint" id="location-desc-hint">
+            🏰 Готический Собор Святилища — Древний готический собор с высокими каменными сводами, витражами, парными огненными жаровнями и обсидиановым алтарём.
+          </div>
         </div>
-      )}
+      </div>
 
       <div id="hud-bottom">
+        <div className="power-balance-pill" title="Соотношение боевой мощи армий на доске">
+          <span className="power-score-label" id="power-score-text">Сила армий — Белые: 49 | Чёрные: 49</span>
+          <div className="power-bar-track">
+            <div className="power-bar-white" id="power-bar-white-fill"></div>
+          </div>
+        </div>
         <div className="hint-pill" id="controls-hint">
-          <strong>Управление:</strong> Клик по фигуре — ход &nbsp;•&nbsp; Откройте «Выбор фигур» для превращения &nbsp;•&nbsp; H: Скрыть интерфейс
+          <strong>Управление:</strong> Клик — ход &nbsp;•&nbsp; 🌋 Помещения (10) — смена локации &nbsp;•&nbsp; ⚡ Способность — магия фигуры
         </div>
         <div className="captured-pill" id="captured-tray"></div>
       </div>
@@ -604,4 +922,5 @@ export default function App() {
     </>
   );
 }
+
 
