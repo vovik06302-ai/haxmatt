@@ -1,0 +1,26 @@
+appId: com.wizardchess3d.sanctum
+productName: Wizard Chess 3D
+directories:
+  output: release
+files:
+  - dist/**/*
+  - electron/**/*
+  - package.json
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+  artifactName: "${productName}-Setup-${version}.${ext}"
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: "Wizard Chess 3D"
+portable:
+  artifactName: "${productName}-Portable-${version}.${ext}"
