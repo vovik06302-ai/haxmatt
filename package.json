@@ -2,15 +2,14 @@
   "name": "wizard-chess-aistudio-applet",
   "private": true,
   "version": "1.2.0",
+  "description": "Wizard Chess 3D — Gothic Cathedral & Demon Riders",
+  "author": "Wizard Chess 3D",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
-    "predev": "[ -d node_modules/.bin ] || bun install || npm install",
     "dev": "vite --port=3000 --host=0.0.0.0",
-    "prebuild": "[ -d node_modules/.bin ] || bun install || npm install",
     "build": "vite build",
-    "dist:exe": "vite build && npx electron-builder --win --x64 --config electron-builder.yml",
-    "prelint": "[ -d node_modules/.bin ] || bun install || npm install",
+    "dist:exe": "vite build && npx electron-builder --win --x64 --config electron-builder.yml --publish never",
     "lint": "tsc --noEmit",
     "preview": "vite preview"
   },
