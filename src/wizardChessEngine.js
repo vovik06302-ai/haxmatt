@@ -2,6 +2,11 @@ import * as THREE_NS from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { Reflector } from 'three/examples/jsm/objects/Reflector.js';
 
 /** @type {any} */
 const THREE = THREE_NS;
@@ -1638,20 +1643,141 @@ export function initWizardChess() {
 
     const boardLightSqMat = new THREE.MeshStandardMaterial({
       color: 0xdcd3c2,
-      roughness: 0.38,
-      metalness: 0.06
+      roughness: 0.16,
+      metalness: 0.22,
+      transparent: true,
+      opacity: 0.85
     });
     const boardDarkSqMat = new THREE.MeshStandardMaterial({
       color: 0x14171f,
-      roughness: 0.28,
-      metalness: 0.18
+      roughness: 0.12,
+      metalness: 0.34,
+      transparent: true,
+      opacity: 0.82
     });
+
+    let boardReflectorMesh = null;
+    let boardVeinsCanvas = null;
+    let boardVeinsCtx = null;
+    let boardVeinsTexture = null;
+    let boardVeinsOverlayMesh = null;
+    const boardGodRaysGroup = new THREE.Group();
+    scene.add(boardGodRaysGroup);
+    const battleScarsGroup = new THREE.Group();
+    scene.add(battleScarsGroup);
+    const combatVfxList = [];
+
+    function updateBoardSurfaceVeinsForLocation(loc) {
+      if (!boardVeinsCtx || !boardVeinsTexture) return;
+      const ctx = boardVeinsCtx;
+      const w = 512;
+      const h = 512;
+      ctx.clearRect(0, 0, w, h);
+
+      const isLava = Boolean(loc?.isLava);
+      const locId = loc?.id || 'cathedral';
+      let strokeCol = 'rgba(212, 175, 55, 0.36)';
+      let glowCol = '#f59e0b';
+      if (isLava) {
+        strokeCol = 'rgba(255, 94, 0, 0.78)';
+        glowCol = '#ff3300';
+      } else if (locId === 'ice_citadel') {
+        strokeCol = 'rgba(125, 211, 252, 0.65)';
+        glowCol = '#38bdf8';
+      } else if (locId === 'emerald_crypt') {
+        strokeCol = 'rgba(52, 211, 153, 0.65)';
+        glowCol = '#10b981';
+      } else if (locId === 'shadow_abyss' || locId === 'crystal_cavern') {
+        strokeCol = 'rgba(232, 121, 249, 0.62)';
+        glowCol = '#d946ef';
+      } else if (locId === 'blood_arena') {
+        strokeCol = 'rgba(251, 113, 133, 0.65)';
+        glowCol = '#e11d48';
+      }
+
+      ctx.save();
+      ctx.strokeStyle = strokeCol;
+      ctx.shadowColor = glowCol;
+      ctx.shadowBlur = isLava ? 14 : 8;
+      ctx.lineWidth = isLava ? 2.4 : 1.6;
+
+      // Subtle glowing sacred geometry / elemental veins along the chessboard grid
+      ctx.beginPath();
+      ctx.arc(w / 2, h / 2, 186, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(w / 2, h / 2, 92, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // Elemental crack / rune filaments across tiles
+      for (let i = 0; i < 14; i++) {
+        const ang = (i / 14) * Math.PI * 2;
+        let x = w / 2 + Math.cos(ang) * 44;
+        let y = h / 2 + Math.sin(ang) * 44;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        for (let step = 0; step < 5; step++) {
+          const jitter = ((i * 7 + step * 13) % 11 - 5) * 0.14;
+          x += Math.cos(ang + jitter) * 36;
+          y += Math.sin(ang + jitter) * 36;
+          ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      }
+      ctx.restore();
+      boardVeinsTexture.needsUpdate = true;
+    }
+
+    function buildBoardVolumetricGodRays(colorHex = 0xffe6a3) {
+      while (boardGodRaysGroup.children.length > 0) {
+        boardGodRaysGroup.remove(boardGodRaysGroup.children[0]);
+      }
+      const rayMat = new THREE.MeshBasicMaterial({
+        color: colorHex,
+        transparent: true,
+        opacity: 0.065,
+        blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
+        depthWrite: false
+      });
+      const rayPositions = [
+        { x: -1.1, z: -1.1, rx: 0.14, rz: -0.12, rTop: 0.25, rBot: 0.95 },
+        { x: 1.1, z: -1.1, rx: 0.14, rz: 0.12, rTop: 0.25, rBot: 0.95 },
+        { x: 0.0, z: 0.0, rx: 0.08, rz: 0.0, rTop: 0.45, rBot: 1.45 }
+      ];
+      for (const rp of rayPositions) {
+        const cone = new THREE.Mesh(
+          new THREE.CylinderGeometry(rp.rTop, rp.rBot, 6.8, 24, 1, true),
+          rayMat
+        );
+        cone.position.set(rp.x, BOARD_SURFACE_Y + 3.35, rp.z);
+        cone.rotation.set(rp.rx, 0, rp.rz);
+        boardGodRaysGroup.add(cone);
+      }
+    }
 
     function buildChessBoardGrid() {
       const tileH = 0.036;
       const sqGeo = new THREE.BoxGeometry(BOARD_SQ_SIZE * 0.985, tileH, BOARD_SQ_SIZE * 0.985);
       const lightSqMat = boardLightSqMat;
       const darkSqMat = boardDarkSqMat;
+
+      // Real-time planar Mirror Reflector under the semi-translucent marble & obsidian squares
+      try {
+        const mirrorSize = BOARD_SQ_SIZE * 8.02;
+        const reflectorGeo = new THREE.PlaneGeometry(mirrorSize, mirrorSize);
+        boardReflectorMesh = new Reflector(reflectorGeo, {
+          clipBias: 0.003,
+          textureWidth: Math.min(1024, window.innerWidth),
+          textureHeight: Math.min(1024, window.innerHeight),
+          color: 0x555b66
+        });
+        boardReflectorMesh.rotation.x = -Math.PI / 2;
+        boardReflectorMesh.position.set(0, BOARD_SURFACE_Y - 0.0012, 0);
+        boardGroup.add(boardReflectorMesh);
+      } catch {
+        // Fallback if WebGL context restricts secondary render target
+      }
 
       for (let r = 0; r < 8; r++) {
         for (let c = 0; c < 8; c++) {
@@ -1665,6 +1791,29 @@ export function initWizardChess() {
           boardSquareMeshes.push(sqMesh);
         }
       }
+
+      // Dynamic Location-Reactive Glowing Veins Overlay on the Chessboard
+      boardVeinsCanvas = document.createElement('canvas');
+      boardVeinsCanvas.width = 512;
+      boardVeinsCanvas.height = 512;
+      boardVeinsCtx = boardVeinsCanvas.getContext('2d');
+      boardVeinsTexture = new THREE.CanvasTexture(boardVeinsCanvas);
+      const veinsMat = new THREE.MeshBasicMaterial({
+        map: boardVeinsTexture,
+        transparent: true,
+        opacity: 0.52,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
+      });
+      boardVeinsOverlayMesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(BOARD_SQ_SIZE * 7.96, BOARD_SQ_SIZE * 7.96),
+        veinsMat
+      );
+      boardVeinsOverlayMesh.rotation.x = -Math.PI / 2;
+      boardVeinsOverlayMesh.position.set(0, BOARD_SURFACE_Y + 0.0014, 0);
+      boardGroup.add(boardVeinsOverlayMesh);
+      updateBoardSurfaceVeinsForLocation(null);
+      buildBoardVolumetricGodRays(0xffe6a3);
 
       // Sculpted Golden Border Frame around the 8x8 tiles on top of the Obsidian Altar
       const halfB = 4.0 * BOARD_SQ_SIZE;
@@ -2649,6 +2798,9 @@ export function initWizardChess() {
       if (typeof clearBoardTrapAndShieldMeshes === 'function') {
         clearBoardTrapAndShieldMeshes();
       }
+      while (battleScarsGroup.children.length > 0) {
+        battleScarsGroup.remove(battleScarsGroup.children[0]);
+      }
       renderer.shadowMap.needsUpdate = true;
       updateTurnUI();
       if (typeof updateScriptBarUI === 'function') updateScriptBarUI();
@@ -2909,6 +3061,20 @@ export function initWizardChess() {
       selMesh.position.set(selPos.x, BOARD_SURFACE_Y + 0.01, selPos.z);
       squareHighlightsGroup.add(selMesh);
 
+      // Volumetric Selection God-Ray Beam illuminating the chosen piece from above
+      const selBeamGeo = new THREE.CylinderGeometry(0.05, 0.165, 2.6, 20, 1, true);
+      const selBeamMat = new THREE.MeshBasicMaterial({
+        color: 0xfde047,
+        transparent: true,
+        opacity: 0.14,
+        blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
+        depthWrite: false
+      });
+      const selBeamMesh = new THREE.Mesh(selBeamGeo, selBeamMat);
+      selBeamMesh.position.set(selPos.x, BOARD_SURFACE_Y + 1.3, selPos.z);
+      squareHighlightsGroup.add(selBeamMesh);
+
       for (const m of moves) {
         const pos = boardToWorld(m.r, m.c);
         if (m.capture) {
@@ -2935,13 +3101,122 @@ export function initWizardChess() {
     }
 
     // =========================================================================
-    // Stone Shatter Debris Physics (Shared VBO to avoid mid-attack GPU buffer allocation)
+    // Stone Shatter Debris Physics + Elemental Combat VFX + Persistent Battle Scars
     // =========================================================================
     const sharedShardGeo = new THREE.DodecahedronGeometry(1, 0);
 
-    function spawnStoneShatter(worldPos, color) {
+    function spawnBattleScarOnSquare(worldPos, attackerType = 'queen') {
+      const scarGroup = new THREE.Group();
+      scarGroup.position.set(worldPos.x, BOARD_SURFACE_Y + 0.0022, worldPos.z);
+
+      let scarHex = 0xff6a00;
+      if (attackerType === 'wizard') scarHex = 0xc084fc;
+      else if (attackerType === 'archbishop' || attackerType === 'queen' || attackerType === 'king') scarHex = 0xfacc15;
+      else if (attackerType === 'demon_rider' || attackerType === 'dragon') scarHex = 0xff2a00;
+
+      // Scorched impact ring
+      const scorchDisk = new THREE.Mesh(
+        new THREE.CircleGeometry(0.145, 20),
+        new THREE.MeshBasicMaterial({
+          color: 0x050507,
+          transparent: true,
+          opacity: 0.62,
+          depthWrite: false
+        })
+      );
+      scorchDisk.rotation.x = -Math.PI / 2;
+      scarGroup.add(scorchDisk);
+
+      // Glowing elemental fracture ring inside crater
+      const emberRing = new THREE.Mesh(
+        new THREE.RingGeometry(0.04, 0.115, 16),
+        new THREE.MeshBasicMaterial({
+          color: scarHex,
+          transparent: true,
+          opacity: 0.48,
+          blending: THREE.AdditiveBlending,
+          side: THREE.DoubleSide,
+          depthWrite: false
+        })
+      );
+      emberRing.rotation.x = -Math.PI / 2;
+      emberRing.position.y = 0.0008;
+      scarGroup.add(emberRing);
+
+      // Small resting stone rubble shards around the square perimeter
+      for (let i = 0; i < 4; i++) {
+        const ang = (i / 4) * Math.PI * 2 + Math.random() * 0.6;
+        const rad = 0.12 + Math.random() * 0.035;
+        const rub = new THREE.Mesh(sharedShardGeo, blackPieceMat);
+        rub.scale.set(0.016, 0.009, 0.014);
+        rub.position.set(Math.cos(ang) * rad, 0.006, Math.sin(ang) * rad);
+        rub.rotation.set(Math.random(), Math.random(), Math.random());
+        scarGroup.add(rub);
+      }
+
+      battleScarsGroup.add(scarGroup);
+    }
+
+    function spawnElementalCombatVFX(worldPos, attackerType = 'queen') {
+      let vfxColor = 0xff6a00;
+      if (attackerType === 'demon_rider') vfxColor = 0xff1e00;
+      else if (attackerType === 'wizard') vfxColor = 0xd946ef;
+      else if (attackerType === 'dragon') vfxColor = 0xff5500;
+      else if (attackerType === 'archbishop' || attackerType === 'queen' || attackerType === 'king') vfxColor = 0xfde047;
+      else vfxColor = 0x38bdf8;
+
+      const vfxGroup = new THREE.Group();
+      vfxGroup.position.copy(worldPos);
+      scene.add(vfxGroup);
+
+      // 1. Expanding Elemental Shockwave Torus
+      const ringMat = new THREE.MeshBasicMaterial({
+        color: vfxColor,
+        transparent: true,
+        opacity: 0.92,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
+      });
+      const shockRing = new THREE.Mesh(new THREE.TorusGeometry(0.12, 0.022, 12, 36), ringMat);
+      shockRing.rotation.x = Math.PI / 2;
+      shockRing.position.y = 0.04;
+      vfxGroup.add(shockRing);
+
+      // 2. Vertical Energy / Flame / Lightning Pillar
+      const pillarH =
+        attackerType === 'archbishop' || attackerType === 'queen' || attackerType === 'king'
+          ? 3.6
+          : 1.45;
+      const pillarMat = new THREE.MeshBasicMaterial({
+        color: vfxColor,
+        transparent: true,
+        opacity: 0.78,
+        blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
+        depthWrite: false
+      });
+      const pillarGeo =
+        attackerType === 'wizard'
+          ? new THREE.IcosahedronGeometry(0.24, 1)
+          : new THREE.CylinderGeometry(0.03, 0.22, pillarH, 16, 1, true);
+      const pillarMesh = new THREE.Mesh(pillarGeo, pillarMat);
+      pillarMesh.position.y = attackerType === 'wizard' ? 0.32 : pillarH * 0.5;
+      vfxGroup.add(pillarMesh);
+
+      combatVfxList.push({
+        group: vfxGroup,
+        shockRing,
+        pillarMesh,
+        ringMat,
+        pillarMat,
+        elapsed: 0,
+        duration: 0.85
+      });
+    }
+
+    function spawnStoneShatter(worldPos, color, attackerType = 'queen') {
       const mat = color === 'w' ? whitePieceMat : blackPieceMat;
-      for (let i = 0; i < 32; i++) {
+      for (let i = 0; i < 36; i++) {
         const sz = 0.024 + Math.random() * 0.048;
         const frag = new THREE.Mesh(sharedShardGeo, mat);
         frag.scale.setScalar(sz);
@@ -2956,20 +3231,22 @@ export function initWizardChess() {
           mesh: frag,
           baseScale: sz,
           vel: new THREE.Vector3(
-            (Math.random() - 0.5) * 2.2,
-            1.2 + Math.random() * 2.0,
-            (Math.random() - 0.5) * 2.2
+            (Math.random() - 0.5) * 2.4,
+            1.3 + Math.random() * 2.1,
+            (Math.random() - 0.5) * 2.4
           ),
           rotVel: new THREE.Vector3(
             Math.random() * 9,
             Math.random() * 9,
             Math.random() * 9
           ),
-          life: 2.2
+          life: 2.3
         });
       }
-      impactFlashLight.position.set(worldPos.x, worldPos.y + 0.4, worldPos.z);
-      impactFlashLight.intensity = 7.5;
+      spawnElementalCombatVFX(worldPos, attackerType);
+      spawnBattleScarOnSquare(worldPos, attackerType);
+      impactFlashLight.position.set(worldPos.x, worldPos.y + 0.45, worldPos.z);
+      impactFlashLight.intensity = 9.5;
     }
 
     // =========================================================================
@@ -3621,7 +3898,7 @@ export function initWizardChess() {
               if (captured && captured.mesh) {
                 const shatterOrigin = captured.mesh.position.clone();
                 scene.remove(captured.mesh);
-                spawnStoneShatter(shatterOrigin, captured.color);
+                spawnStoneShatter(shatterOrigin, captured.color, piece.type);
                 if (typeof playSanctumSound === 'function') {
                   playSanctumSound('capture');
                 }
@@ -6803,13 +7080,31 @@ export function initWizardChess() {
       locationParticleSystem = null;
     }
 
+    let glowingParticleTex = null;
+    function getGlowingParticleTexture() {
+      if (glowingParticleTex) return glowingParticleTex;
+      const c = document.createElement('canvas');
+      c.width = 64;
+      c.height = 64;
+      const ctx = c.getContext('2d');
+      const g = ctx.createRadialGradient(32, 32, 2, 32, 32, 30);
+      g.addColorStop(0, 'rgba(255, 255, 255, 1.0)');
+      g.addColorStop(0.35, 'rgba(255, 240, 200, 0.82)');
+      g.addColorStop(0.7, 'rgba(255, 180, 100, 0.28)');
+      g.addColorStop(1, 'rgba(0, 0, 0, 0.0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, 64, 64);
+      glowingParticleTex = new THREE.CanvasTexture(c);
+      return glowingParticleTex;
+    }
+
     function spawnLocationParticles(loc) {
-      const count = loc.particleCount || 140;
+      const count = Math.round((loc.particleCount || 160) * 1.45);
       const positions = new Float32Array(count * 3);
       const phases = new Float32Array(count);
       for (let i = 0; i < count; i++) {
-        positions[i * 3] = (Math.random() - 0.5) * 11.5;
-        positions[i * 3 + 1] = 0.25 + Math.random() * 7.8;
+        positions[i * 3] = (Math.random() - 0.5) * 12.5;
+        positions[i * 3 + 1] = 0.22 + Math.random() * 8.2;
         positions[i * 3 + 2] = (Math.random() - 0.5) * 26.0;
         phases[i] = Math.random() * Math.PI * 2;
       }
@@ -6817,9 +7112,10 @@ export function initWizardChess() {
       pGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
       const pMat = new THREE.PointsMaterial({
         color: loc.particleHex,
-        size: loc.isLava ? 0.11 : 0.085,
+        map: getGlowingParticleTexture(),
+        size: loc.isLava ? 0.22 : 0.16,
         transparent: true,
-        opacity: loc.isLava ? 0.92 : 0.78,
+        opacity: loc.isLava ? 0.96 : 0.85,
         blending: THREE.AdditiveBlending,
         depthWrite: false
       });
@@ -7566,10 +7862,15 @@ export function initWizardChess() {
         mat.needsUpdate = true;
       }
 
-      // 5. Chessboard Tiles & Border Frame Theme
+      // 5. Chessboard Tiles, Mirror Veins & Volumetric God Rays
       boardLightSqMat.color.setHex(loc.lightSqHex);
       boardDarkSqMat.color.setHex(loc.darkSqHex);
       goldTrimMat.color.setHex(loc.trimHex);
+      updateBoardSurfaceVeinsForLocation(loc);
+      buildBoardVolumetricGodRays(loc.brazierHex);
+      if (bloomPass && currentGraphicsPresetIdx === 0) {
+        bloomPass.strength = loc.isLava ? 0.54 : 0.42;
+      }
 
       // 6. Build 3D Location Architecture, Lava Lakes, Geysers & Particles
       buildLocationEnvironment3D(loc);
@@ -7596,6 +7897,241 @@ export function initWizardChess() {
     function cycleSanctumLocation() {
       return setSanctumLocation(currentLocationIdx + 1);
     }
+
+    // =========================================================================
+    // 4 Luxury Army Material Themes & Post-Processing HDR Graphics Pipeline
+    // =========================================================================
+    const ARMY_MATERIAL_THEMES = [
+      {
+        id: 'marble_obsidian',
+        icon: '🏛',
+        ruLabel: '🏛 Материал: Мрамор и Обсидиан',
+        shortName: 'Мрамор и Обсидиан',
+        wColor: 0xe6dfd0,
+        wRough: 0.28,
+        wMetal: 0.08,
+        wEmissive: 0x000000,
+        wEmissiveInt: 0,
+        bColor: 0x222630,
+        bRough: 0.22,
+        bMetal: 0.28,
+        bEmissive: 0x000000,
+        bEmissiveInt: 0
+      },
+      {
+        id: 'gold_bronze',
+        icon: '👑',
+        ruLabel: '👑 Материал: Золото и Бронза',
+        shortName: 'Золото и Бронза',
+        wColor: 0xfde047,
+        wRough: 0.16,
+        wMetal: 0.88,
+        wEmissive: 0x78350f,
+        wEmissiveInt: 0.18,
+        bColor: 0x451a03,
+        bRough: 0.20,
+        bMetal: 0.84,
+        bEmissive: 0x290f02,
+        bEmissiveInt: 0.15
+      },
+      {
+        id: 'jade_ruby',
+        icon: '💎',
+        ruLabel: '💎 Материал: Нефрит и Рубин',
+        shortName: 'Нефрит и Рубин',
+        wColor: 0x34d399,
+        wRough: 0.14,
+        wMetal: 0.26,
+        wEmissive: 0x065f46,
+        wEmissiveInt: 0.35,
+        bColor: 0xbe123c,
+        bRough: 0.14,
+        bMetal: 0.32,
+        bEmissive: 0x881337,
+        bEmissiveInt: 0.42
+      },
+      {
+        id: 'crystal_hellstone',
+        icon: '🔥',
+        ruLabel: '🔥 Материал: Кристалл и Адский камень',
+        shortName: 'Кристалл и Адский камень',
+        wColor: 0x7dd3fc,
+        wRough: 0.10,
+        wMetal: 0.35,
+        wEmissive: 0x0284c7,
+        wEmissiveInt: 0.48,
+        bColor: 0x2a0808,
+        bRough: 0.18,
+        bMetal: 0.48,
+        bEmissive: 0xdc2626,
+        bEmissiveInt: 0.55
+      }
+    ];
+    let currentArmyMaterialIdx = 0;
+
+    function applyArmyMaterialThemeToMaterials(theme) {
+      whitePieceMat.color.setHex(theme.wColor);
+      whitePieceMat.roughness = theme.wRough;
+      whitePieceMat.metalness = theme.wMetal;
+      whitePieceMat.emissive.setHex(theme.wEmissive);
+      whitePieceMat.emissiveIntensity = theme.wEmissiveInt;
+      whitePieceMat.needsUpdate = true;
+
+      blackPieceMat.color.setHex(theme.bColor);
+      blackPieceMat.roughness = theme.bRough;
+      blackPieceMat.metalness = theme.bMetal;
+      blackPieceMat.emissive.setHex(theme.bEmissive);
+      blackPieceMat.emissiveIntensity = theme.bEmissiveInt;
+      blackPieceMat.needsUpdate = true;
+
+      for (const pType of ['archbishop', 'chancellor', 'wizard', 'dragon', 'demon_rider', 'staunton']) {
+        const wMat = specialPieceMats[`${pType}_w`];
+        const bMat = specialPieceMats[`${pType}_b`];
+        if (wMat) {
+          wMat.color.setHex(theme.wColor);
+          wMat.roughness = theme.wRough;
+          wMat.metalness = theme.wMetal;
+          wMat.emissive.setHex(theme.wEmissive);
+          wMat.emissiveIntensity = theme.wEmissiveInt;
+          wMat.needsUpdate = true;
+        }
+        if (bMat) {
+          bMat.color.setHex(theme.bColor);
+          bMat.roughness = theme.bRough;
+          bMat.metalness = theme.bMetal;
+          bMat.emissive.setHex(theme.bEmissive);
+          bMat.emissiveIntensity = theme.bEmissiveInt;
+          bMat.needsUpdate = true;
+        }
+      }
+      renderer.shadowMap.needsUpdate = true;
+    }
+
+    function setArmyMaterialTheme(idOrIdx, silent = false) {
+      let idx = 0;
+      if (typeof idOrIdx === 'string') {
+        const found = ARMY_MATERIAL_THEMES.findIndex((t) => t.id === idOrIdx);
+        if (found >= 0) idx = found;
+      } else if (typeof idOrIdx === 'number') {
+        idx = ((idOrIdx % ARMY_MATERIAL_THEMES.length) + ARMY_MATERIAL_THEMES.length) % ARMY_MATERIAL_THEMES.length;
+      }
+      currentArmyMaterialIdx = idx;
+      const theme = ARMY_MATERIAL_THEMES[currentArmyMaterialIdx];
+      applyArmyMaterialThemeToMaterials(theme);
+
+      const hudMatBtn = document.getElementById('btn-material-theme');
+      if (hudMatBtn) {
+        hudMatBtn.textContent = theme.ruLabel;
+      }
+      for (let i = 0; i < ARMY_MATERIAL_THEMES.length; i++) {
+        const chip = document.getElementById(`btn-mat-${ARMY_MATERIAL_THEMES[i].id}`);
+        if (chip) chip.classList.toggle('active', i === currentArmyMaterialIdx);
+      }
+      if (!silent) {
+        playSanctumSound('ability');
+        showNotificationToast(`${theme.icon} Выбран материал фигур: «${theme.shortName}»`);
+      }
+      return theme;
+    }
+
+    function cycleArmyMaterialTheme() {
+      return setArmyMaterialTheme(currentArmyMaterialIdx + 1);
+    }
+
+    let composer = null;
+    let bloomPass = null;
+    const GRAPHICS_PRESETS = [
+      {
+        id: 'ultra_hdr',
+        ruLabel: '✨ Графика: Ультра HDR',
+        useBloom: true,
+        bloomStrength: 0.44,
+        useReflector: true,
+        useGodRays: true
+      },
+      {
+        id: 'cinematic',
+        ruLabel: '🎬 Графика: Кино (Свечение)',
+        useBloom: true,
+        bloomStrength: 0.28,
+        useReflector: false,
+        useGodRays: true
+      },
+      {
+        id: 'classic',
+        ruLabel: '⚡ Графика: Быстрая (60+ FPS)',
+        useBloom: false,
+        bloomStrength: 0,
+        useReflector: false,
+        useGodRays: false
+      }
+    ];
+    let currentGraphicsPresetIdx = 0;
+
+    try {
+      composer = new EffectComposer(renderer);
+      const renderPass = new RenderPass(scene, camera);
+      composer.addPass(renderPass);
+      bloomPass = new UnrealBloomPass(
+        new THREE.Vector2(window.innerWidth, window.innerHeight),
+        0.44,
+        0.38,
+        0.76
+      );
+      composer.addPass(bloomPass);
+      const outputPass = new OutputPass();
+      composer.addPass(outputPass);
+    } catch {
+      composer = null;
+    }
+
+    function setGraphicsPreset(idxOrId, silent = false) {
+      let idx = 0;
+      if (typeof idxOrId === 'string') {
+        const found = GRAPHICS_PRESETS.findIndex((p) => p.id === idxOrId);
+        if (found >= 0) idx = found;
+      } else if (typeof idxOrId === 'number') {
+        idx = ((idxOrId % GRAPHICS_PRESETS.length) + GRAPHICS_PRESETS.length) % GRAPHICS_PRESETS.length;
+      }
+      currentGraphicsPresetIdx = idx;
+      const preset = GRAPHICS_PRESETS[currentGraphicsPresetIdx];
+      if (bloomPass) {
+        const loc = SANCTUM_LOCATIONS[currentLocationIdx];
+        bloomPass.strength =
+          preset.id === 'ultra_hdr' && loc?.isLava ? 0.54 : preset.bloomStrength;
+      }
+      if (boardReflectorMesh) {
+        boardReflectorMesh.visible = preset.useReflector;
+      }
+      boardGodRaysGroup.visible = preset.useGodRays;
+
+      const btn = document.getElementById('btn-graphics-preset');
+      if (btn) {
+        btn.textContent = preset.ruLabel;
+        btn.classList.toggle('active', preset.useBloom);
+      }
+      if (!silent) {
+        playSanctumSound('ability');
+        showNotificationToast(`${preset.ruLabel} активирована!`);
+      }
+      return preset;
+    }
+
+    function cycleGraphicsPreset() {
+      return setGraphicsPreset(currentGraphicsPresetIdx + 1);
+    }
+
+    document.getElementById('btn-material-theme')?.addEventListener('click', () => {
+      cycleArmyMaterialTheme();
+    });
+    for (const matTheme of ARMY_MATERIAL_THEMES) {
+      document.getElementById(`btn-mat-${matTheme.id}`)?.addEventListener('click', () => {
+        setArmyMaterialTheme(matTheme.id);
+      });
+    }
+    document.getElementById('btn-graphics-preset')?.addEventListener('click', () => {
+      cycleGraphicsPreset();
+    });
 
     document.getElementById('btn-ability-cast')?.addEventListener('click', () => {
       castSelectedPieceAbility();
@@ -8456,12 +8992,40 @@ export function initWizardChess() {
           Math.cos(elapsedTotal * 9.1 + i) * 0.16;
       }
 
-      if (isAnimatingMove || activeMoveTweens.length > 0 || shatterDebris.length > 0 || checkmateState.active) {
+      // Advance Elemental Combat VFX (Hellfire Shockwaves, Arcane Singularities, Celestial Lightning)
+      for (let i = combatVfxList.length - 1; i >= 0; i--) {
+        const vfx = combatVfxList[i];
+        vfx.elapsed += dt;
+        const u = Math.min(1, vfx.elapsed / vfx.duration);
+        const ringScale = 1 + u * 4.2;
+        vfx.shockRing.scale.set(ringScale, ringScale, 1);
+        vfx.ringMat.opacity = Math.max(0, (1 - u) * 0.92);
+        vfx.pillarMesh.rotation.y += dt * 4.5;
+        vfx.pillarMesh.scale.set(1 + u * 0.65, 1 + u * 0.25, 1 + u * 0.65);
+        vfx.pillarMat.opacity = Math.max(0, (1 - u * u) * 0.78);
+        if (u >= 1) {
+          scene.remove(vfx.group);
+          combatVfxList.splice(i, 1);
+        }
+      }
+
+      if (
+        isAnimatingMove ||
+        activeMoveTweens.length > 0 ||
+        shatterDebris.length > 0 ||
+        combatVfxList.length > 0 ||
+        checkmateState.active
+      ) {
         renderer.shadowMap.needsUpdate = true;
       }
 
       if (doRender) {
-        renderer.render(scene, camera);
+        const preset = GRAPHICS_PRESETS[currentGraphicsPresetIdx];
+        if (composer && preset?.useBloom && !isAutomatedTest) {
+          composer.render();
+        } else {
+          renderer.render(scene, camera);
+        }
       }
     }
 
@@ -8469,6 +9033,10 @@ export function initWizardChess() {
     window.wizardChess.setManualStepMode = (v) => {
       manualStepMode = Boolean(v);
     };
+    window.wizardChess.setArmyMaterialTheme = setArmyMaterialTheme;
+    window.wizardChess.cycleArmyMaterialTheme = cycleArmyMaterialTheme;
+    window.wizardChess.setGraphicsPreset = setGraphicsPreset;
+    window.wizardChess.cycleGraphicsPreset = cycleGraphicsPreset;
 
     function animate() {
       if (!navigator.webdriver && !manualStepMode) {
@@ -8483,6 +9051,9 @@ export function initWizardChess() {
       camera.aspect = window.innerWidth / window.innerHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(window.innerWidth, window.innerHeight);
+      if (composer) {
+        composer.setSize(window.innerWidth, window.innerHeight);
+      }
     });
 
 

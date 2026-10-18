@@ -1,7 +1,141 @@
 import path from 'path';
+import crypto from 'crypto';
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
-import { WebSocketServer } from 'ws';
+
+interface SimpleWsClient {
+  readyState: number;
+  send: (data: string) => void;
+  close: () => void;
+}
+
+function upgradeToNativeWebSocket(
+  request: any,
+  socket: any,
+  onMessage: (client: SimpleWsClient, text: string) => void,
+  onClose: (client: SimpleWsClient) => void
+): SimpleWsClient | null {
+  const key = request.headers?.['sec-websocket-key'];
+  if (!key) {
+    socket.destroy();
+    return null;
+  }
+
+  const acceptKey = crypto
+    .createHash('sha1')
+    .update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11')
+    .digest('base64');
+
+  socket.write(
+    [
+      'HTTP/1.1 101 Switching Protocols',
+      'Upgrade: websocket',
+      'Connection: Upgrade',
+      `Sec-WebSocket-Accept: ${acceptKey}`,
+      '\r\n'
+    ].join('\r\n')
+  );
+
+  const client: SimpleWsClient = {
+    readyState: 1,
+    send(text: string) {
+      if (client.readyState !== 1 || socket.destroyed) return;
+      const payload = Buffer.from(text, 'utf8');
+      const len = payload.length;
+      let header: Buffer;
+      if (len < 126) {
+        header = Buffer.from([0x81, len]);
+      } else if (len < 65536) {
+        header = Buffer.from([0x81, 126, (len >> 8) & 0xff, len & 0xff]);
+      } else {
+        header = Buffer.alloc(10);
+        header[0] = 0x81;
+        header[1] = 127;
+        header.writeUInt32BE(0, 2);
+        header.writeUInt32BE(len >>> 0, 6);
+      }
+      try {
+        socket.write(Buffer.concat([header, payload]));
+      } catch {
+        // ignore write errors
+      }
+    },
+    close() {
+      if (client.readyState !== 1) return;
+      client.readyState = 3;
+      try {
+        socket.end();
+      } catch {
+        // ignore
+      }
+    }
+  };
+
+  let recvBuffer = Buffer.alloc(0);
+
+  socket.on('data', (chunk: Buffer) => {
+    recvBuffer = Buffer.concat([recvBuffer, chunk]);
+    while (recvBuffer.length >= 2) {
+      const byte0 = recvBuffer[0];
+      const byte1 = recvBuffer[1];
+      const opcode = byte0 & 0x0f;
+      const isMasked = (byte1 & 0x80) !== 0;
+      let payloadLen = byte1 & 0x7f;
+      let offset = 2;
+
+      if (payloadLen === 126) {
+        if (recvBuffer.length < 4) return;
+        payloadLen = recvBuffer.readUInt16BE(2);
+        offset = 4;
+      } else if (payloadLen === 127) {
+        if (recvBuffer.length < 10) return;
+        payloadLen = recvBuffer.readUInt32BE(6);
+        offset = 10;
+      }
+
+      const maskLen = isMasked ? 4 : 0;
+      if (recvBuffer.length < offset + maskLen + payloadLen) return;
+
+      const maskKey = isMasked ? recvBuffer.subarray(offset, offset + 4) : null;
+      offset += maskLen;
+      const frameData = Buffer.from(recvBuffer.subarray(offset, offset + payloadLen));
+      recvBuffer = recvBuffer.subarray(offset + payloadLen);
+
+      if (maskKey) {
+        for (let i = 0; i < frameData.length; i++) {
+          frameData[i] ^= maskKey[i & 3];
+        }
+      }
+
+      if (opcode === 0x08) {
+        // Close frame
+        client.readyState = 3;
+        socket.end();
+        return;
+      } else if (opcode === 0x09) {
+        // Ping -> send Pong (0x8A)
+        try {
+          socket.write(Buffer.concat([Buffer.from([0x8a, frameData.length]), frameData]));
+        } catch {}
+      } else if (opcode === 0x01) {
+        onMessage(client, frameData.toString('utf8'));
+      }
+    }
+  });
+
+  const handleSocketClose = () => {
+    if (client.readyState !== 3) {
+      client.readyState = 3;
+      onClose(client);
+    }
+  };
+
+  socket.on('close', handleSocketClose);
+  socket.on('end', handleSocketClose);
+  socket.on('error', handleSocketClose);
+
+  return client;
+}
 
 interface OnlineRoom {
   code: string;
@@ -28,8 +162,8 @@ interface OnlineRoom {
 
 function createOnlineMultiplayerPlugin() {
   const rooms = new Map<string, OnlineRoom>();
-  const sseClients = new Map<string, Set< any >>();
-  const wsRoomClients = new Map<string, Set< any >>();
+  const sseClients = new Map<string, Set<any>>();
+  const wsRoomClients = new Map<string, Set<SimpleWsClient>>();
 
   function generateRoomCode(): string {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -125,97 +259,92 @@ function createOnlineMultiplayerPlugin() {
     name: 'wizard-chess-online-multiplayer',
     configureServer(server: any) {
       if (server.httpServer) {
-        const wss = new WebSocketServer({ noServer: true });
-
-        server.httpServer.on('upgrade', (request: any, socket: any, head: any) => {
+        server.httpServer.on('upgrade', (request: any, socket: any) => {
           const url = request.url || '';
-          if (url.startsWith('/ws-online')) {
-            wss.handleUpgrade(request, socket, head, (ws) => {
-              wss.emit('connection', ws, request);
-            });
-          }
-        });
+          if (!url.startsWith('/ws-online')) return;
 
-        wss.on('connection', (ws: any) => {
           let subscribedCode: string | null = null;
 
-          ws.on('message', (raw: any) => {
-            try {
-              const msg = JSON.parse(raw.toString());
-              if (msg.type === 'subscribe' && msg.code) {
-                const code = String(msg.code).toUpperCase();
-                if (subscribedCode && wsRoomClients.has(subscribedCode)) {
-                  wsRoomClients.get(subscribedCode)?.delete(ws);
+          upgradeToNativeWebSocket(
+            request,
+            socket,
+            (ws, rawText) => {
+              try {
+                const msg = JSON.parse(rawText);
+                if (msg.type === 'subscribe' && msg.code) {
+                  const code = String(msg.code).toUpperCase();
+                  if (subscribedCode && wsRoomClients.has(subscribedCode)) {
+                    wsRoomClients.get(subscribedCode)?.delete(ws);
+                  }
+                  subscribedCode = code;
+                  if (!wsRoomClients.has(code)) {
+                    wsRoomClients.set(code, new Set());
+                  }
+                  wsRoomClients.get(code)!.add(ws);
+                  const existing = rooms.get(code);
+                  if (existing) {
+                    const state = sanitizeRoom(existing, false);
+                    ws.send(JSON.stringify({ type: 'room_state', ...state, room: state }));
+                  }
+                } else if (msg.type === 'move' && msg.code) {
+                  const code = String(msg.code).toUpperCase();
+                  const room = rooms.get(code);
+                  const mv = msg.move || msg;
+                  if (room && mv.from && mv.to) {
+                    const seq = room.moves.length + 1;
+                    const moveColor = mv.color === 'b' ? 'b' : 'w';
+                    const moveRecord = {
+                      seq,
+                      playerToken: msg.playerToken || mv.playerToken,
+                      color: moveColor as 'w' | 'b',
+                      from: mv.from,
+                      to: mv.to,
+                      promotion: mv.promotion || 'archbishop',
+                      ts: Date.now()
+                    };
+                    room.moves.push(moveRecord);
+                    room.turn = moveColor === 'w' ? 'b' : 'w';
+                    room.updatedAt = Date.now();
+                    broadcastPayload(code, {
+                      type: 'move',
+                      playerToken: msg.playerToken || mv.playerToken,
+                      move: moveRecord
+                    });
+                  }
+                } else if ((msg.type === 'location_change' || msg.type === 'location') && msg.code && msg.locationId) {
+                  const code = String(msg.code).toUpperCase();
+                  const room = rooms.get(code);
+                  if (room) {
+                    room.locationId = String(msg.locationId);
+                    room.updatedAt = Date.now();
+                    broadcastPayload(code, {
+                      type: 'location_change',
+                      playerToken: msg.playerToken,
+                      locationId: room.locationId
+                    });
+                  }
+                } else if (msg.type === 'reset' && msg.code) {
+                  const code = String(msg.code).toUpperCase();
+                  const room = rooms.get(code);
+                  if (room) {
+                    room.moves = [];
+                    room.turn = 'w';
+                    room.resetCount = (room.resetCount || 0) + 1;
+                    room.updatedAt = Date.now();
+                    broadcastPayload(code, {
+                      type: 'reset',
+                      playerToken: msg.playerToken
+                    });
+                  }
                 }
-                subscribedCode = code;
-                if (!wsRoomClients.has(code)) {
-                  wsRoomClients.set(code, new Set());
-                }
-                wsRoomClients.get(code)!.add(ws);
-                const existing = rooms.get(code);
-                if (existing) {
-                  const state = sanitizeRoom(existing, false);
-                  ws.send(JSON.stringify({ type: 'room_state', ...state, room: state }));
-                }
-              } else if (msg.type === 'move' && msg.code) {
-                const code = String(msg.code).toUpperCase();
-                const room = rooms.get(code);
-                const mv = msg.move || msg;
-                if (room && mv.from && mv.to) {
-                  const seq = room.moves.length + 1;
-                  const moveColor = mv.color === 'b' ? 'b' : 'w';
-                  const moveRecord = {
-                    seq,
-                    playerToken: msg.playerToken || mv.playerToken,
-                    color: moveColor as 'w' | 'b',
-                    from: mv.from,
-                    to: mv.to,
-                    promotion: mv.promotion || 'archbishop',
-                    ts: Date.now()
-                  };
-                  room.moves.push(moveRecord);
-                  room.turn = moveColor === 'w' ? 'b' : 'w';
-                  room.updatedAt = Date.now();
-                  broadcastPayload(code, {
-                    type: 'move',
-                    playerToken: msg.playerToken || mv.playerToken,
-                    move: moveRecord
-                  });
-                }
-              } else if ((msg.type === 'location_change' || msg.type === 'location') && msg.code && msg.locationId) {
-                const code = String(msg.code).toUpperCase();
-                const room = rooms.get(code);
-                if (room) {
-                  room.locationId = String(msg.locationId);
-                  room.updatedAt = Date.now();
-                  broadcastPayload(code, {
-                    type: 'location_change',
-                    playerToken: msg.playerToken,
-                    locationId: room.locationId
-                  });
-                }
-              } else if (msg.type === 'reset' && msg.code) {
-                const code = String(msg.code).toUpperCase();
-                const room = rooms.get(code);
-                if (room) {
-                  room.moves = [];
-                  room.turn = 'w';
-                  room.resetCount = (room.resetCount || 0) + 1;
-                  room.updatedAt = Date.now();
-                  broadcastPayload(code, {
-                    type: 'reset',
-                    playerToken: msg.playerToken
-                  });
-                }
+              } catch (e) {}
+            },
+            (ws) => {
+              if (subscribedCode && wsRoomClients.has(subscribedCode)) {
+                wsRoomClients.get(subscribedCode)?.delete(ws);
               }
-            } catch (e) {}
-          });
-
-          ws.on('close', () => {
-            if (subscribedCode && wsRoomClients.has(subscribedCode)) {
-              wsRoomClients.get(subscribedCode)?.delete(ws);
             }
-          });
+          );
         });
       }
 

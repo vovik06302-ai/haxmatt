@@ -384,6 +384,22 @@ export default function App() {
             Вид: Скульптуры и Демоны
           </button>
           <button
+            className="hud-btn active"
+            id="btn-material-theme"
+            title="Переключить материал шахматных фигур (Мрамор и Обсидиан / Золото и Бронза / Нефрит и Рубин / Кристалл и Адский камень)"
+            onClick={() => setMobileSheetOpen(false)}
+          >
+            🏛 Материал: Мрамор и Обсидиан
+          </button>
+          <button
+            className="hud-btn active"
+            id="btn-graphics-preset"
+            title="Переключить режим 3D-графики (Ультра HDR: Bloom + Зеркальная доска + Объёмные лучи / Кино / Классика)"
+            onClick={() => setMobileSheetOpen(false)}
+          >
+            ✨ Графика: Ультра HDR
+          </button>
+          <button
             className="hud-btn"
             id="btn-ai-persona"
             title="Переключить характер и стиль игры ИИ (Гроссмейстер / Агрессивный Демон / Хранитель Собора)"
@@ -833,6 +849,48 @@ export default function App() {
                   {lbl}
                 </button>
               ))}
+            </div>
+          </div>
+
+          <div className="pieces-drawer-section">
+            <span className="new-pieces-label">Материалы армий (3D-покрытие фигур):</span>
+            <div className="new-pieces-row">
+              <button
+                type="button"
+                className="piece-chip active"
+                id="btn-mat-marble_obsidian"
+                title="Слоновая кость и Чёрный обсидиан"
+              >
+                <span className="piece-chip-icon">🏛</span>
+                <span>Мрамор и Обсидиан</span>
+              </button>
+              <button
+                type="button"
+                className="piece-chip"
+                id="btn-mat-gold_bronze"
+                title="Королевское полированное золото и Тёмная бронза"
+              >
+                <span className="piece-chip-icon">👑</span>
+                <span>Золото и Бронза</span>
+              </button>
+              <button
+                type="button"
+                className="piece-chip"
+                id="btn-mat-jade_ruby"
+                title="Светящийся изумрудный нефрит и Кровавый рубин"
+              >
+                <span className="piece-chip-icon">💎</span>
+                <span>Нефрит и Рубин</span>
+              </button>
+              <button
+                type="button"
+                className="piece-chip demon-chip"
+                id="btn-mat-crystal_hellstone"
+                title="Небесный аркановый кристалл и Раскалённый камень Бездны"
+              >
+                <span className="piece-chip-icon">🔥</span>
+                <span>Кристалл и Адский камень</span>
+              </button>
             </div>
           </div>
 
