@@ -232,6 +232,15 @@ export default function App() {
           </button>
           <button
             type="button"
+            className="hud-btn hud-room-copy-btn"
+            id="hud-room-copy-btn"
+            style={{ display: 'none' }}
+            title="Нажмите, чтобы скопировать код комнаты в буфер обмена"
+          >
+            📋 Код: <span id="hud-room-code-val" className="selectable-code">----</span>
+          </button>
+          <button
+            type="button"
             className={`hud-btn ${piecesDrawerOpen ? 'active' : ''}`}
             id="btn-pieces-drawer-top"
             onClick={togglePiecesDrawer}
@@ -520,15 +529,26 @@ export default function App() {
 
               <div className="online-card">
                 <div className="online-box-title">🔑 Войти по коду комнаты</div>
-                <div className="online-box-sub">Введите 4-значный код комнаты, который вам прислал соперник:</div>
+                <div className="online-box-sub">
+                  Вставьте (Ctrl+V, правый клик или кнопкой «Вставить») код комнаты или ссылку от соперника:
+                </div>
                 <div className="join-code-row">
                   <input
                     type="text"
                     id="input-room-code"
-                    className="room-code-input"
+                    className="room-code-input selectable-code"
                     placeholder="КОД (напр. A7K9)"
-                    maxLength={6}
+                    autoComplete="off"
+                    spellCheck={false}
                   />
+                  <button
+                    type="button"
+                    className="online-paste-btn"
+                    id="btn-paste-code"
+                    title="Вставить код комнаты из буфера обмена"
+                  >
+                    📋 Вставить
+                  </button>
                   <button type="button" className="online-action-btn" id="btn-join-room">
                     Войти
                   </button>
@@ -538,8 +558,25 @@ export default function App() {
 
             <div id="created-room-box" className="created-room-banner" style={{ display: 'none' }}>
               <div className="created-room-top">
-                <span>Код вашей онлайн-комнаты:</span>
-                <strong id="created-room-code" className="created-room-code-badge">----</strong>
+                <span>Код вашей онлайн-комнаты (нажмите или выделите для копирования):</span>
+                <div className="created-room-code-wrap">
+                  <strong
+                    id="created-room-code"
+                    className="created-room-code-badge selectable-code"
+                    title="Нажмите, чтобы скопировать код комнаты"
+                  >
+                    ----
+                  </strong>
+                  <input
+                    type="text"
+                    id="created-room-code-input"
+                    className="created-room-readonly-input selectable-code"
+                    readOnly
+                    defaultValue="----"
+                    aria-label="Поле кода комнаты для выделения и копирования"
+                    title="Выделите и скопируйте (Ctrl+C)"
+                  />
+                </div>
               </div>
               <div className="created-room-actions">
                 <button type="button" className="hud-btn" id="btn-copy-code">

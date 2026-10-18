@@ -4882,6 +4882,91 @@ export function initWizardChess() {
     let mpBroadcastChannel = null;
     let mpEventSource = null;
 
+    function extractRoomCodeFromText(raw) {
+      const str = String(raw || '').trim();
+      if (!str) return '';
+      // Check if it contains ?room=XXXX or &room=XXXX
+      const urlMatch = str.match(/[?&]room=([A-Za-z0-9]{4,8})/i);
+      if (urlMatch && urlMatch[1]) {
+        return urlMatch[1].toUpperCase().slice(0, 4);
+      }
+      // If it's a clean 4-char code
+      const cleanAlpha = str.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+      if (cleanAlpha.length === 4) {
+        return cleanAlpha;
+      }
+      // Check for standalone 4-character alphanumeric token in pasted text
+      const tokenMatch = str.match(/\b([A-Za-z0-9]{4})\b/);
+      if (tokenMatch && tokenMatch[1]) {
+        return tokenMatch[1].toUpperCase();
+      }
+      return cleanAlpha.slice(0, 4);
+    }
+
+    async function copyTextToClipboard(text) {
+      const str = String(text || '');
+      if (!str) return false;
+      try {
+        localStorage.setItem('wizard_chess_last_copied', str);
+        if (roomCode) {
+          localStorage.setItem('wizard_chess_last_room_code', roomCode);
+        }
+      } catch {
+        // ignore storage errors
+      }
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        try {
+          await navigator.clipboard.writeText(str);
+          return true;
+        } catch {
+          // fallback below
+        }
+      }
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = str;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.top = '-9999px';
+        ta.style.left = '-9999px';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        ta.setSelectionRange(0, str.length);
+        const ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        return Boolean(ok);
+      } catch {
+        return false;
+      }
+    }
+
+    function syncDisplayedRoomCode(code) {
+      const validCode = code || '----';
+      const createdBox = document.getElementById('created-room-box');
+      if (createdBox && code) {
+        createdBox.style.display = 'block';
+      }
+      const createdCodeEl = document.getElementById('created-room-code');
+      if (createdCodeEl) createdCodeEl.textContent = validCode;
+      const createdInputEl = document.getElementById('created-room-code-input');
+      if (createdInputEl) createdInputEl.value = validCode;
+      const hudCopyBtn = document.getElementById('hud-room-copy-btn');
+      const hudCodeVal = document.getElementById('hud-room-code-val');
+      if (hudCodeVal) hudCodeVal.textContent = validCode;
+      if (hudCopyBtn) {
+        hudCopyBtn.style.display = code ? 'inline-flex' : 'none';
+      }
+      if (code) {
+        try {
+          localStorage.setItem('wizard_chess_last_room_code', code);
+        } catch {
+          // ignore
+        }
+      }
+    }
+
     function updateOnlineStatusUI(statusText, isConnected = false, isWaiting = false) {
       const onlinePill = document.getElementById('online-status-pill');
       const onlineLabel = document.getElementById('online-status-label');
@@ -4896,6 +4981,7 @@ export function initWizardChess() {
         onlinePill.classList.toggle('connected', Boolean(isConnected));
         onlinePill.classList.toggle('waiting', Boolean(isWaiting));
       }
+      syncDisplayedRoomCode(roomCode);
     }
 
     function stopMultiplayerSync() {
@@ -4929,7 +5015,7 @@ export function initWizardChess() {
         onlineWs = null;
       }
       onlineOpponentConnected = false;
-      updateOnlineStatusUI('Онлайн: Лобби', false, false);
+      updateOnlineStatusUI('🌐 Играть онлайн', false, false);
     }
 
     function handleIncomingOnlinePayload(payload) {
@@ -5231,10 +5317,7 @@ export function initWizardChess() {
         const newUrl = `${window.location.pathname}?room=${roomCode}`;
         window.history.replaceState({}, '', newUrl);
 
-        const createdBox = document.getElementById('created-room-box');
-        if (createdBox) createdBox.style.display = 'block';
-        const createdCodeEl = document.getElementById('created-room-code');
-        if (createdCodeEl) createdCodeEl.textContent = roomCode;
+        syncDisplayedRoomCode(roomCode);
 
         resetChessBoard(true, false);
         subscribeMultiplayerRoom(roomCode);
@@ -5308,14 +5391,13 @@ export function initWizardChess() {
       const newUrl = `${window.location.pathname}?room=${roomCode}`;
       window.history.replaceState({}, '', newUrl);
 
-      const createdBox = document.getElementById('created-room-box');
-      if (createdBox) createdBox.style.display = 'block';
-      const createdCodeEl = document.getElementById('created-room-code');
-      if (createdCodeEl) createdCodeEl.textContent = roomCode;
+      syncDisplayedRoomCode(roomCode);
+      await copyTextToClipboard(roomCode);
       const mpStatusEl = document.getElementById('mp-status-msg');
       if (mpStatusEl) {
-        mpStatusEl.textContent = `Комната ${roomCode} создана! Вы играете за ${playerColor === 'w' ? 'Белых (♔)' : 'Чёрных (♚)'}. Отправьте код или ссылку другу.`;
+        mpStatusEl.textContent = `Комната ${roomCode} создана и код скопирован в буфер! Вы играете за ${playerColor === 'w' ? 'Белых (♔)' : 'Чёрных (♚)'}. Вставьте код (Ctrl+V) другу.`;
       }
+      showNotificationToast(`📋 Комната ${roomCode} создана (код скопирован)!`);
 
       updateOnlineStatusUI(`Ожидание соперника • Код: ${roomCode}`, false, true);
       resetChessBoard(true, false);
@@ -5323,10 +5405,14 @@ export function initWizardChess() {
     }
 
     async function joinMultiplayerRoom(codeInput) {
-      const clean = String(codeInput || '').trim().toUpperCase();
+      const clean = extractRoomCodeFromText(codeInput);
+      const inputEl = document.getElementById('input-room-code');
+      if (inputEl && clean) {
+        inputEl.value = clean;
+      }
       const mpStatusEl = document.getElementById('mp-status-msg');
-      if (!clean) {
-        if (mpStatusEl) mpStatusEl.textContent = 'Введите 4-значный код комнаты.';
+      if (!clean || clean.length < 4) {
+        if (mpStatusEl) mpStatusEl.textContent = 'Введите или вставьте 4-значный код комнаты (например, A7K9).';
         return false;
       }
       ensurePlayerToken();
@@ -5373,10 +5459,7 @@ export function initWizardChess() {
         setSanctumLocation(roomLocId, { silent: true, fromRemote: true });
       }
 
-      const createdBox = document.getElementById('created-room-box');
-      if (createdBox) createdBox.style.display = 'block';
-      const createdCodeEl = document.getElementById('created-room-code');
-      if (createdCodeEl) createdCodeEl.textContent = roomCode;
+      syncDisplayedRoomCode(roomCode);
       if (mpStatusEl) {
         mpStatusEl.textContent = `Вы подключились к комнате ${roomCode} за ${playerColor === 'w' ? 'Белых (♔)' : 'Чёрных (♚)'}!`;
       }
@@ -7674,18 +7757,38 @@ export function initWizardChess() {
       closeLobbyModal();
     });
 
-    document.getElementById('btn-copy-code')?.addEventListener('click', () => {
+    async function handleCopyRoomCodeAction() {
       if (!roomCode) return;
-      navigator.clipboard?.writeText(roomCode);
-      document.getElementById('mp-status-msg').textContent = `Код комнаты ${roomCode} скопирован в буфер обмена!`;
+      await copyTextToClipboard(roomCode);
+      const readonlyInput = document.getElementById('created-room-code-input');
+      if (readonlyInput) {
+        readonlyInput.focus();
+        readonlyInput.select();
+      }
+      const mpStatusEl = document.getElementById('mp-status-msg');
+      if (mpStatusEl) {
+        mpStatusEl.textContent = `✅ Код комнаты ${roomCode} скопирован в буфер обмена! Теперь его можно вставить (Ctrl+V) куда угодно.`;
+      }
       showNotificationToast(`📋 Код комнаты ${roomCode} скопирован!`);
+    }
+
+    document.getElementById('btn-copy-code')?.addEventListener('click', handleCopyRoomCodeAction);
+    document.getElementById('created-room-code')?.addEventListener('click', handleCopyRoomCodeAction);
+    document.getElementById('hud-room-copy-btn')?.addEventListener('click', handleCopyRoomCodeAction);
+
+    document.getElementById('created-room-code-input')?.addEventListener('click', (e) => {
+      e.target.select();
+      handleCopyRoomCodeAction();
     });
 
-    document.getElementById('btn-copy-link')?.addEventListener('click', () => {
+    document.getElementById('btn-copy-link')?.addEventListener('click', async () => {
       if (!roomCode) return;
       const inviteUrl = `${window.location.origin}${window.location.pathname}?room=${roomCode}`;
-      navigator.clipboard?.writeText(inviteUrl);
-      document.getElementById('mp-status-msg').textContent = 'Ссылка-приглашение скопирована в буфер обмена!';
+      await copyTextToClipboard(inviteUrl);
+      const mpStatusEl = document.getElementById('mp-status-msg');
+      if (mpStatusEl) {
+        mpStatusEl.textContent = `🔗 Ссылка-приглашение (${inviteUrl}) скопирована в буфер обмена!`;
+      }
       showNotificationToast('🔗 Ссылка на онлайн-партию скопирована!');
     });
 
@@ -7693,12 +7796,73 @@ export function initWizardChess() {
       openLobbyModal('multi');
     });
 
+    document.getElementById('btn-paste-code')?.addEventListener('click', async () => {
+      const inputEl = document.getElementById('input-room-code');
+      const mpStatusEl = document.getElementById('mp-status-msg');
+      let pastedText = '';
+      if (navigator.clipboard && typeof navigator.clipboard.readText === 'function') {
+        try {
+          pastedText = await navigator.clipboard.readText();
+        } catch {
+          // fallback to stored code
+        }
+      }
+      if (!pastedText) {
+        try {
+          pastedText =
+            localStorage.getItem('wizard_chess_last_room_code') ||
+            localStorage.getItem('wizard_chess_last_copied') ||
+            '';
+        } catch {
+          pastedText = '';
+        }
+      }
+      const extracted = extractRoomCodeFromText(pastedText);
+      if (extracted && inputEl) {
+        inputEl.value = extracted;
+        inputEl.focus();
+        inputEl.select();
+        if (mpStatusEl) {
+          mpStatusEl.textContent = `📋 Код комнаты ${extracted} вставлен! Нажмите «Войти» для подключения.`;
+        }
+        showNotificationToast(`📋 Вставлен код комнаты: ${extracted}`);
+      } else {
+        inputEl?.focus();
+        if (mpStatusEl) {
+          mpStatusEl.textContent = 'Кликните в поле ввода и нажмите Ctrl+V (или правый клик → Вставить).';
+        }
+      }
+    });
+
+    const inputRoomCodeEl = document.getElementById('input-room-code');
+    inputRoomCodeEl?.addEventListener('paste', (e) => {
+      const clipText = e.clipboardData?.getData('text') || '';
+      if (clipText) {
+        e.preventDefault();
+        const extracted = extractRoomCodeFromText(clipText);
+        inputRoomCodeEl.value = extracted || clipText.trim().toUpperCase().slice(0, 4);
+        const mpStatusEl = document.getElementById('mp-status-msg');
+        if (mpStatusEl && inputRoomCodeEl.value) {
+          mpStatusEl.textContent = `📋 Вставлен код комнаты: ${inputRoomCodeEl.value}. Нажмите «Войти» или Enter.`;
+        }
+      }
+    });
+
+    inputRoomCodeEl?.addEventListener('input', (e) => {
+      const rawVal = e.target.value || '';
+      if (rawVal.length > 4) {
+        e.target.value = extractRoomCodeFromText(rawVal);
+      } else {
+        e.target.value = rawVal.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+      }
+    });
+
     document.getElementById('btn-join-room')?.addEventListener('click', () => {
-      const val = document.getElementById('input-room-code').value;
+      const val = document.getElementById('input-room-code')?.value || '';
       joinMultiplayerRoom(val);
     });
 
-    document.getElementById('input-room-code')?.addEventListener('keydown', (e) => {
+    inputRoomCodeEl?.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
         joinMultiplayerRoom(e.target.value);
       }
